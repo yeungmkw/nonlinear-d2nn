@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -129,6 +130,20 @@ def build_model_for_task(task, optics, *, input_fraction=0.5, num_classes=10):
 
 def checkpoint_manifest_path(checkpoint_path):
     return Path(checkpoint_path).with_suffix(".json")
+
+
+def checkpoint_variant_path(checkpoint_path, run_name=None):
+    checkpoint_path = Path(checkpoint_path)
+    if not run_name:
+        return checkpoint_path
+
+    safe_name = re.sub(r"\s+", "_", str(run_name).strip())
+    safe_name = re.sub(r'[<>:"/\\|?*]+', "-", safe_name)
+    safe_name = safe_name.strip("._-")
+    if not safe_name:
+        return checkpoint_path
+
+    return checkpoint_path.with_name(f"{checkpoint_path.stem}.{safe_name}{checkpoint_path.suffix}")
 
 
 def read_manifest(path):

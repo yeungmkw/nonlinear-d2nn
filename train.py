@@ -28,6 +28,12 @@ def build_parser():
     parser.add_argument("--lr", type=float, default=0.01)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--save-dir", type=str, default="checkpoints")
+    parser.add_argument(
+        "--run-name",
+        type=str,
+        default=None,
+        help="optional experiment suffix used to keep checkpoints/manifests separate",
+    )
     parser.add_argument("--wavelength", type=float, default=None)
     parser.add_argument("--layer-distance", type=float, default=None)
     parser.add_argument("--pixel-size", type=float, default=None)

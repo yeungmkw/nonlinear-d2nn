@@ -8,6 +8,7 @@ __pycache__/
 .codex/
 .codex_tmp/
 .claude/
+%SystemDrive%/
 
 data/
 checkpoints/

@@ -19,6 +19,7 @@ from artifacts import (
     IMAGER_PAPER_OPTICS,
     build_model_for_task,
     checkpoint_manifest_path,
+    checkpoint_variant_path,
     load_checkpoint_state_dict,
     maybe_show,
     optical_config_dict,
@@ -135,7 +136,7 @@ def run_classification_training(args, device, data_dir, save_dir):
 
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
-    checkpoint_path = save_dir / dataset_cfg["checkpoint_name"]
+    checkpoint_path = checkpoint_variant_path(save_dir / dataset_cfg["checkpoint_name"], args.run_name)
     manifest_path = checkpoint_manifest_path(checkpoint_path)
     best_val_acc = 0.0
 
@@ -166,6 +167,7 @@ def run_classification_training(args, device, data_dir, save_dir):
             "task": "classification",
             "dataset": dataset_cfg["display_name"],
             "checkpoint": str(checkpoint_path),
+            "run_name": args.run_name,
             "paper_target_accuracy": dataset_cfg["paper_target"],
             "epochs": args.epochs,
             "batch_size": args.batch_size,
@@ -433,7 +435,7 @@ def run_imaging_training(args, device, data_dir, save_dir):
     criterion = nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
-    checkpoint_path = save_dir / dataset_cfg["checkpoint_name"]
+    checkpoint_path = checkpoint_variant_path(save_dir / dataset_cfg["checkpoint_name"], args.run_name)
     manifest_path = checkpoint_manifest_path(checkpoint_path)
     best_val_loss = float("inf")
 
@@ -463,6 +465,7 @@ def run_imaging_training(args, device, data_dir, save_dir):
             "task": "imaging",
             "dataset": dataset_cfg["display_name"],
             "checkpoint": str(checkpoint_path),
+            "run_name": args.run_name,
             "epochs": args.epochs,
             "batch_size": args.batch_size,
             "learning_rate": args.lr,
