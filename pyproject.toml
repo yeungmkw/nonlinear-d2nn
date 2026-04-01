@@ -1,0 +1,23 @@
+[project]
+name = "d2nn"
+version = "0.1.0"
+description = "Diffractive Deep Neural Network (D2NN) - reproducing Lin et al. Science 2018"
+requires-python = ">=3.11"
+dependencies = [
+    "torch>=2.0",
+    "torchvision>=0.15",
+    "numpy",
+    "matplotlib",
+]
+
+[project.optional-dependencies]
+dev = ["ipykernel"]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cuda" }
+torchvision = { index = "pytorch-cuda" }
+
+[[tool.uv.index]]
+name = "pytorch-cuda"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true

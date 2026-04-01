@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+.idea/
+.vscode/
+.codex/
+.codex_tmp/
+.claude/
+
+data/
+checkpoints/
+exports/
+figures/
+
+*.log
