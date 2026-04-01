@@ -128,7 +128,7 @@ class D2NNCoreTests(unittest.TestCase):
 
     def test_checkpoint_variant_path_sanitizes_windows_unsafe_characters(self):
         path = checkpoint_variant_path("checkpoints/best_mnist.pth", "baseline: 5/layer?")
-        self.assertEqual(Path("checkpoints/best_mnist.baseline-_5-layer.pth"), path)
+        self.assertEqual(Path("checkpoints/best_mnist.baseline-5-layer.pth"), path)
 
     def test_checkpoint_variant_path_ignores_blank_run_name_after_sanitizing(self):
         path = checkpoint_variant_path("checkpoints/best_mnist.pth", "   ")

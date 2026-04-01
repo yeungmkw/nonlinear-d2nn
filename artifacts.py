@@ -139,6 +139,7 @@ def checkpoint_variant_path(checkpoint_path, run_name=None):
 
     safe_name = re.sub(r"\s+", "_", str(run_name).strip())
     safe_name = re.sub(r'[<>:"/\\|?*]+', "-", safe_name)
+    safe_name = re.sub(r'[-_]{2,}', "-", safe_name)
     safe_name = safe_name.strip("._-")
     if not safe_name:
         return checkpoint_path
