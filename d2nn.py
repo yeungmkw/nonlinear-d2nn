@@ -80,6 +80,28 @@ class IdentityActivation(FieldActivationBase):
         return u
 
 
+class CoherentAmplitudeActivation(FieldActivationBase):
+    """Intensity-dependent amplitude gate that preserves the complex phase."""
+
+    def __init__(self, threshold=0.1, temperature=0.1, gain_min=0.0, gain_max=1.0):
+        super().__init__()
+        if temperature <= 0:
+            raise ValueError("temperature must be positive")
+        if not 0.0 <= gain_min <= gain_max <= 1.0:
+            raise ValueError("gain range must satisfy 0 <= gain_min <= gain_max <= 1")
+
+        self.threshold = float(threshold)
+        self.temperature = float(temperature)
+        self.gain_min = float(gain_min)
+        self.gain_max = float(gain_max)
+
+    def forward(self, u):
+        intensity = safe_abs(u) ** 2
+        gate = torch.sigmoid((intensity - self.threshold) / self.temperature)
+        gain = self.gain_min + (self.gain_max - self.gain_min) * gate
+        return gain.to(dtype=u.real.dtype) * u
+
+
 def normalize_activation_positions(positions, num_layers):
     """Normalize 1-based layer indices used for inter-layer activation placement."""
     if positions in (None, "", ()):
@@ -100,11 +122,14 @@ def normalize_activation_positions(positions, num_layers):
     return tuple(normalized)
 
 
-def build_activation_module(activation_type):
+def build_activation_module(activation_type, activation_hparams=None):
+    activation_hparams = dict(activation_hparams or {})
     if activation_type in (None, "none"):
         return None
     if activation_type == "identity":
         return IdentityActivation()
+    if activation_type == "coherent_amplitude":
+        return CoherentAmplitudeActivation(**activation_hparams)
     raise ValueError(f"Unsupported activation type: {activation_type}")
 
 
@@ -169,7 +194,7 @@ class D2NN(nn.Module):
         self.activations = nn.ModuleDict()
         if self.activation_type != "none":
             for position in self.activation_positions:
-                activation = build_activation_module(self.activation_type)
+                activation = build_activation_module(self.activation_type, self.activation_hparams)
                 if activation is not None:
                     self.activations[str(position)] = activation
         self.register_buffer(
@@ -269,7 +294,7 @@ class D2NNImager(nn.Module):
         self.activations = nn.ModuleDict()
         if self.activation_type != "none":
             for position in self.activation_positions:
-                activation = build_activation_module(self.activation_type)
+                activation = build_activation_module(self.activation_type, self.activation_hparams)
                 if activation is not None:
                     self.activations[str(position)] = activation
         self.register_buffer(

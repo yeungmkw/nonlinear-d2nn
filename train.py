@@ -55,7 +55,7 @@ def build_parser():
         "--activation-type",
         type=str,
         default="none",
-        choices=["none", "identity"],
+        choices=["none", "identity", "coherent_amplitude"],
         help="optional field activation inserted after selected diffractive layers",
     )
     parser.add_argument(
@@ -66,6 +66,8 @@ def build_parser():
     )
     parser.add_argument("--activation-threshold", type=float, default=None)
     parser.add_argument("--activation-temperature", type=float, default=None)
+    parser.add_argument("--activation-gain-min", type=float, default=None)
+    parser.add_argument("--activation-gain-max", type=float, default=None)
     parser.add_argument("--activation-gamma", type=float, default=None)
     parser.add_argument("--activation-responsivity", type=float, default=None)
     parser.add_argument("--activation-emission-phase-mode", type=str, default=None)

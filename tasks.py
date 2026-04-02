@@ -65,6 +65,8 @@ def activation_hparams_from_args(args):
         for key, value in {
             "threshold": args.activation_threshold,
             "temperature": args.activation_temperature,
+            "gain_min": args.activation_gain_min,
+            "gain_max": args.activation_gain_max,
             "gamma": args.activation_gamma,
             "responsivity": args.activation_responsivity,
             "emission_phase_mode": args.activation_emission_phase_mode,

@@ -12,20 +12,27 @@ from artifacts import (
     CLASSIFIER_PAPER_OPTICS,
     IMAGER_PAPER_OPTICS,
     apply_manufacturing_profile,
+    build_layer_stats,
     checkpoint_manifest_path,
     checkpoint_variant_path,
     experiment_manifest_fields,
     export_height_map_to_ascii_stl,
     infer_architecture,
+    quantize_height_map,
     read_manifest,
     resolve_optics,
     save_manifest,
-    quantize_height_map,
-    build_layer_stats,
 )
-from d2nn import D2NN, D2NNImager, IdentityActivation, phase_to_height_map, safe_abs
+from d2nn import (
+    CoherentAmplitudeActivation,
+    D2NN,
+    D2NNImager,
+    IdentityActivation,
+    phase_to_height_map,
+    safe_abs,
+)
 from train import build_parser
-from tasks import d2nn_mse_loss, resolve_experiment_seed
+from tasks import d2nn_mse_loss, resolve_activation_config, resolve_experiment_seed
 from visualize import build_parser as build_visualize_parser
 
 
@@ -127,6 +134,32 @@ class D2NNCoreTests(unittest.TestCase):
         u = torch.randn(2, 8, 8, dtype=torch.cfloat)
         self.assertTrue(torch.equal(activation(u), u))
 
+    def test_coherent_amplitude_activation_preserves_phase_and_limits_gain(self):
+        activation = CoherentAmplitudeActivation(threshold=0.2, temperature=0.05, gain_min=0.1, gain_max=0.9)
+        u = torch.randn(2, 8, 8, dtype=torch.cfloat)
+        out = activation(u)
+
+        input_mag = safe_abs(u)
+        output_mag = safe_abs(out)
+        nonzero = input_mag > 1e-5
+        phase_delta = torch.angle(out[nonzero] / u[nonzero])
+
+        self.assertTrue(torch.all(output_mag <= input_mag * 0.90001))
+        self.assertTrue(torch.all(output_mag >= input_mag * 0.09999))
+        self.assertTrue(torch.allclose(phase_delta, torch.zeros_like(phase_delta), atol=1e-5, rtol=1e-5))
+
+    def test_coherent_amplitude_activation_maps_low_and_high_intensity_to_expected_gain_band(self):
+        activation = CoherentAmplitudeActivation(threshold=0.5, temperature=0.1, gain_min=0.2, gain_max=0.8)
+        low = torch.full((1, 2, 2), 0.1 + 0j, dtype=torch.cfloat)
+        high = torch.full((1, 2, 2), 2.0 + 0j, dtype=torch.cfloat)
+
+        low_gain = safe_abs(activation(low)) / safe_abs(low)
+        high_gain = safe_abs(activation(high)) / safe_abs(high)
+
+        self.assertTrue(torch.all(low_gain < high_gain))
+        self.assertTrue(torch.all(low_gain > 0.19))
+        self.assertTrue(torch.all(high_gain < 0.81))
+
     def test_classifier_identity_activation_matches_baseline_forward(self):
         optics = CLASSIFIER_PAPER_OPTICS.with_overrides(size=24, num_layers=3)
         baseline = D2NN(**optics.classifier_model_kwargs())
@@ -157,6 +190,20 @@ class D2NNCoreTests(unittest.TestCase):
             **optics.classifier_model_kwargs(),
             activation_type="identity",
             activation_positions=(1,),
+        )
+        x = torch.rand(4, 1, 28, 28)
+        target = torch.tensor([0, 1, 2, 3])
+        loss = d2nn_mse_loss(model(x), target, num_classes=10)
+        loss.backward()
+        self.assertTrue(all(layer.phase.grad is not None for layer in model.layers))
+
+    def test_classifier_coherent_amplitude_activation_supports_backward_pass(self):
+        optics = CLASSIFIER_PAPER_OPTICS.with_overrides(size=24, num_layers=2)
+        model = D2NN(
+            **optics.classifier_model_kwargs(),
+            activation_type="coherent_amplitude",
+            activation_positions=(1,),
+            activation_hparams={"threshold": 0.2, "temperature": 0.1, "gain_min": 0.1, "gain_max": 0.9},
         )
         x = torch.rand(4, 1, 28, 28)
         target = torch.tensor([0, 1, 2, 3])
@@ -252,13 +299,19 @@ class D2NNCoreTests(unittest.TestCase):
         args = build_parser().parse_args(
             [
                 "--activation-type",
-                "identity",
+                "coherent_amplitude",
                 "--activation-positions",
                 "1,3",
+                "--activation-threshold",
+                "0.2",
+                "--activation-temperature",
+                "0.1",
             ]
         )
-        self.assertEqual(args.activation_type, "identity")
+        self.assertEqual(args.activation_type, "coherent_amplitude")
         self.assertEqual(args.activation_positions, "1,3")
+        self.assertAlmostEqual(args.activation_threshold, 0.2)
+        self.assertAlmostEqual(args.activation_temperature, 0.1)
 
     def test_visualize_parser_accepts_seed(self):
         args = build_visualize_parser().parse_args(["--checkpoint", "checkpoints/demo.pth", "--seed", "11"])
@@ -268,6 +321,33 @@ class D2NNCoreTests(unittest.TestCase):
         self.assertEqual(resolve_experiment_seed(11, {"seed": 7}), 11)
         self.assertEqual(resolve_experiment_seed(None, {"seed": 7}), 7)
         self.assertEqual(resolve_experiment_seed(None, None), 42)
+
+    def test_resolve_activation_config_prefers_args_then_manifest_then_defaults(self):
+        parser = build_parser()
+        args = parser.parse_args(["--activation-type", "identity", "--activation-positions", "1,3"])
+        activation_type, positions, hparams = resolve_activation_config(
+            args,
+            {
+                "activation_type": "none",
+                "activation_positions": [2],
+                "activation_hparams": {"threshold": 0.2},
+            },
+        )
+        self.assertEqual(activation_type, "identity")
+        self.assertEqual(positions, (1, 3))
+        self.assertEqual(hparams, {"threshold": 0.2})
+
+        activation_type, positions, hparams = resolve_activation_config(
+            None,
+            {
+                "activation_type": "identity",
+                "activation_positions": [2],
+                "activation_hparams": {"threshold": 0.2},
+            },
+        )
+        self.assertEqual(activation_type, "identity")
+        self.assertEqual(positions, (2,))
+        self.assertEqual(hparams, {"threshold": 0.2})
 
     def test_resolve_optics_uses_checkpoint_architecture_when_missing(self):
         state_dict = {
