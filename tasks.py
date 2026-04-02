@@ -113,6 +113,26 @@ def resolve_experiment_seed(explicit_seed, manifest=None, default=42):
     return default
 
 
+def model_activation_diagnostics(model):
+    diagnostics_fn = getattr(model, "activation_diagnostics", None)
+    if diagnostics_fn is None:
+        return {}
+    return diagnostics_fn()
+
+
+def format_activation_diagnostics(diagnostics):
+    parts = []
+    for position, stats in diagnostics.items():
+        summary = []
+        if "mean_gain" in stats:
+            summary.append(f"gain={stats['mean_gain']:.3f}")
+        if "mean_intensity" in stats:
+            summary.append(f"I={stats['mean_intensity']:.3f}")
+        if summary:
+            parts.append(f"L{position} " + ", ".join(summary))
+    return " | ".join(parts)
+
+
 def train_classification_one_epoch(model, loader, optimizer, device, num_classes=10):
     model.train()
     total_loss = 0.0
@@ -204,6 +224,7 @@ def run_classification_training(args, device, data_dir, save_dir):
     checkpoint_path = checkpoint_variant_path(save_dir / dataset_cfg["checkpoint_name"], args.run_name)
     manifest_path = checkpoint_manifest_path(checkpoint_path)
     best_val_acc = 0.0
+    last_activation_stats = {}
 
     for epoch in range(1, args.epochs + 1):
         t0 = time.time()
@@ -216,6 +237,9 @@ def run_classification_training(args, device, data_dir, save_dir):
             f"Train loss: {train_loss:.4f} acc: {train_acc:.2f}% | "
             f"Val loss: {val_loss:.4f} acc: {val_acc:.2f}%"
         )
+        last_activation_stats = model_activation_diagnostics(model)
+        if last_activation_stats:
+            print(f"  activation stats: {format_activation_diagnostics(last_activation_stats)}")
 
         if val_acc > best_val_acc:
             best_val_acc = val_acc
@@ -248,6 +272,7 @@ def run_classification_training(args, device, data_dir, save_dir):
                 activation_positions=activation_positions,
                 activation_hparams=activation_hparams,
             ),
+            "activation_diagnostics": last_activation_stats,
         },
     )
     print(
@@ -527,6 +552,7 @@ def run_imaging_training(args, device, data_dir, save_dir):
     checkpoint_path = checkpoint_variant_path(save_dir / dataset_cfg["checkpoint_name"], args.run_name)
     manifest_path = checkpoint_manifest_path(checkpoint_path)
     best_val_loss = float("inf")
+    last_activation_stats = {}
 
     for epoch in range(1, args.epochs + 1):
         t0 = time.time()
@@ -538,6 +564,9 @@ def run_imaging_training(args, device, data_dir, save_dir):
             f"Epoch {epoch}/{args.epochs} ({elapsed:.1f}s) | "
             f"Train loss: {train_loss:.4f} | Val loss: {val_loss:.4f}"
         )
+        last_activation_stats = model_activation_diagnostics(model)
+        if last_activation_stats:
+            print(f"  activation stats: {format_activation_diagnostics(last_activation_stats)}")
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
@@ -570,6 +599,7 @@ def run_imaging_training(args, device, data_dir, save_dir):
                 activation_positions=activation_positions,
                 activation_hparams=activation_hparams,
             ),
+            "activation_diagnostics": last_activation_stats,
         },
     )
     print(f"\nTest MSE: {test_loss:.4f} (saved to {checkpoint_path.name})")

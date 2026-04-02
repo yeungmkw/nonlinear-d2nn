@@ -69,6 +69,10 @@ def propagate_output_field(u, layers, transfer_function, activations=None):
 class FieldActivationBase(nn.Module):
     """Base interface for optional field activations inserted between layers."""
 
+    def __init__(self):
+        super().__init__()
+        self.last_stats = {}
+
     def forward(self, u):
         raise NotImplementedError
 
@@ -99,6 +103,12 @@ class CoherentAmplitudeActivation(FieldActivationBase):
         intensity = safe_abs(u) ** 2
         gate = torch.sigmoid((intensity - self.threshold) / self.temperature)
         gain = self.gain_min + (self.gain_max - self.gain_min) * gate
+        self.last_stats = {
+            "mean_intensity": float(intensity.mean().detach().cpu()),
+            "mean_gain": float(gain.mean().detach().cpu()),
+            "max_gain": float(gain.max().detach().cpu()),
+            "min_gain": float(gain.min().detach().cpu()),
+        }
         return gain.to(dtype=u.real.dtype) * u
 
 
@@ -265,6 +275,9 @@ class D2NN(nn.Module):
     def export_phase_masks(self, wrap=True):
         return collect_phase_masks(self.layers, wrap=wrap)
 
+    def activation_diagnostics(self):
+        return {key: dict(module.last_stats) for key, module in self.activations.items() if module.last_stats}
+
 
 class D2NNImager(nn.Module):
     """D2NN variant for image reconstruction / imaging-lens experiments."""
@@ -334,3 +347,6 @@ class D2NNImager(nn.Module):
 
     def export_phase_masks(self, wrap=True):
         return collect_phase_masks(self.layers, wrap=wrap)
+
+    def activation_diagnostics(self):
+        return {key: dict(module.last_stats) for key, module in self.activations.items() if module.last_stats}

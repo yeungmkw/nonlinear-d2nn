@@ -160,6 +160,17 @@ class D2NNCoreTests(unittest.TestCase):
         self.assertTrue(torch.all(low_gain > 0.19))
         self.assertTrue(torch.all(high_gain < 0.81))
 
+    def test_coherent_amplitude_activation_records_last_stats(self):
+        activation = CoherentAmplitudeActivation(threshold=0.2, temperature=0.1, gain_min=0.1, gain_max=0.9)
+        u = torch.full((1, 2, 2), 1.0 + 0j, dtype=torch.cfloat)
+        _ = activation(u)
+
+        self.assertIn("mean_intensity", activation.last_stats)
+        self.assertIn("mean_gain", activation.last_stats)
+        self.assertGreater(activation.last_stats["mean_intensity"], 0.0)
+        self.assertGreaterEqual(activation.last_stats["mean_gain"], 0.1)
+        self.assertLessEqual(activation.last_stats["mean_gain"], 0.9)
+
     def test_classifier_identity_activation_matches_baseline_forward(self):
         optics = CLASSIFIER_PAPER_OPTICS.with_overrides(size=24, num_layers=3)
         baseline = D2NN(**optics.classifier_model_kwargs())
@@ -210,6 +221,22 @@ class D2NNCoreTests(unittest.TestCase):
         loss = d2nn_mse_loss(model(x), target, num_classes=10)
         loss.backward()
         self.assertTrue(all(layer.phase.grad is not None for layer in model.layers))
+
+    def test_model_activation_diagnostics_reports_configured_positions(self):
+        optics = CLASSIFIER_PAPER_OPTICS.with_overrides(size=24, num_layers=3)
+        model = D2NN(
+            **optics.classifier_model_kwargs(),
+            activation_type="coherent_amplitude",
+            activation_positions=(1, 3),
+            activation_hparams={"threshold": 0.2, "temperature": 0.1, "gain_min": 0.1, "gain_max": 0.9},
+        )
+        x = torch.rand(2, 1, 28, 28)
+        _ = model(x)
+
+        diagnostics = model.activation_diagnostics()
+        self.assertEqual(set(diagnostics.keys()), {"1", "3"})
+        self.assertIn("mean_gain", diagnostics["1"])
+        self.assertIn("mean_intensity", diagnostics["3"])
 
     def test_imager_identity_activation_keeps_shape_and_dtype(self):
         optics = IMAGER_PAPER_OPTICS.with_overrides(size=20, num_layers=3)
