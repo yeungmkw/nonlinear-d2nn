@@ -14,6 +14,7 @@ from artifacts import (
     apply_manufacturing_profile,
     build_layer_stats,
     checkpoint_manifest_path,
+    derive_experiment_run_name,
     checkpoint_variant_path,
     experiment_manifest_fields,
     export_height_map_to_ascii_stl,
@@ -288,6 +289,43 @@ class D2NNCoreTests(unittest.TestCase):
     def test_checkpoint_variant_path_appends_run_name_before_suffix(self):
         path = checkpoint_variant_path("checkpoints/best_mnist.pth", "baseline_5layer")
         self.assertEqual(Path("checkpoints/best_mnist.baseline_5layer.pth"), path)
+
+    def test_derive_experiment_run_name_keeps_explicit_run_name(self):
+        run_name = derive_experiment_run_name(
+            run_name="manual_name",
+            experiment_stage="mechanism_ablation",
+            activation_type="coherent_amplitude",
+            activation_positions=(1, 3),
+            activation_hparams={"threshold": 0.2},
+            seed=42,
+        )
+        self.assertEqual(run_name, "manual_name")
+
+    def test_derive_experiment_run_name_returns_none_for_phase_only_default(self):
+        run_name = derive_experiment_run_name(
+            run_name=None,
+            experiment_stage="baseline",
+            activation_type="none",
+            activation_positions=(),
+            activation_hparams={},
+            seed=42,
+        )
+        self.assertIsNone(run_name)
+
+    def test_derive_experiment_run_name_encodes_nonlinear_identity(self):
+        run_name = derive_experiment_run_name(
+            run_name=None,
+            experiment_stage="mechanism_ablation",
+            activation_type="coherent_amplitude",
+            activation_positions=(1, 3),
+            activation_hparams={"threshold": 0.2, "temperature": 0.1, "gain_min": 0.1, "gain_max": 0.9},
+            seed=42,
+        )
+        self.assertIn("mechanism-ablation", run_name)
+        self.assertIn("act-coherent-amplitude", run_name)
+        self.assertIn("pos-1-3", run_name)
+        self.assertIn("seed-42", run_name)
+        self.assertIn("threshold-0p2", run_name)
 
     def test_checkpoint_variant_path_sanitizes_windows_unsafe_characters(self):
         path = checkpoint_variant_path("checkpoints/best_mnist.pth", "baseline: 5/layer?")

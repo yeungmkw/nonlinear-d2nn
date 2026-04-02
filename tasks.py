@@ -20,6 +20,7 @@ from artifacts import (
     build_model_for_task,
     checkpoint_manifest_path,
     checkpoint_variant_path,
+    derive_experiment_run_name,
     experiment_manifest_fields,
     load_checkpoint_state_dict,
     maybe_show,
@@ -221,10 +222,20 @@ def run_classification_training(args, device, data_dir, save_dir):
 
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
-    checkpoint_path = checkpoint_variant_path(save_dir / dataset_cfg["checkpoint_name"], args.run_name)
+    resolved_run_name = derive_experiment_run_name(
+        run_name=args.run_name,
+        experiment_stage=args.experiment_stage,
+        activation_type=activation_type,
+        activation_positions=activation_positions,
+        activation_hparams=activation_hparams,
+        seed=args.seed,
+    )
+    checkpoint_path = checkpoint_variant_path(save_dir / dataset_cfg["checkpoint_name"], resolved_run_name)
     manifest_path = checkpoint_manifest_path(checkpoint_path)
     best_val_acc = 0.0
     last_activation_stats = {}
+    if resolved_run_name:
+        print(f"Run name: {resolved_run_name}")
 
     for epoch in range(1, args.epochs + 1):
         t0 = time.time()
@@ -264,7 +275,7 @@ def run_classification_training(args, device, data_dir, save_dir):
             "test_loss": test_loss,
             **experiment_manifest_fields(
                 checkpoint_path=checkpoint_path,
-                run_name=args.run_name,
+                run_name=resolved_run_name,
                 experiment_stage=args.experiment_stage,
                 seed=args.seed,
                 optics=optics,
@@ -549,10 +560,20 @@ def run_imaging_training(args, device, data_dir, save_dir):
     criterion = nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
-    checkpoint_path = checkpoint_variant_path(save_dir / dataset_cfg["checkpoint_name"], args.run_name)
+    resolved_run_name = derive_experiment_run_name(
+        run_name=args.run_name,
+        experiment_stage=args.experiment_stage,
+        activation_type=activation_type,
+        activation_positions=activation_positions,
+        activation_hparams=activation_hparams,
+        seed=args.seed,
+    )
+    checkpoint_path = checkpoint_variant_path(save_dir / dataset_cfg["checkpoint_name"], resolved_run_name)
     manifest_path = checkpoint_manifest_path(checkpoint_path)
     best_val_loss = float("inf")
     last_activation_stats = {}
+    if resolved_run_name:
+        print(f"Run name: {resolved_run_name}")
 
     for epoch in range(1, args.epochs + 1):
         t0 = time.time()
@@ -591,7 +612,7 @@ def run_imaging_training(args, device, data_dir, save_dir):
             "test_mse": test_loss,
             **experiment_manifest_fields(
                 checkpoint_path=checkpoint_path,
-                run_name=args.run_name,
+                run_name=resolved_run_name,
                 experiment_stage=args.experiment_stage,
                 seed=args.seed,
                 optics=optics,

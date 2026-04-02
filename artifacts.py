@@ -151,15 +151,78 @@ def checkpoint_manifest_path(checkpoint_path):
     return Path(checkpoint_path).with_suffix(".json")
 
 
+def _sanitize_run_name(value: str | None) -> str:
+    safe_name = re.sub(r"\s+", "_", str(value or "").strip())
+    safe_name = re.sub(r'[<>:"/\\|?*]+', "-", safe_name)
+    safe_name = re.sub(r"[-_]{2,}", "-", safe_name)
+    return safe_name.strip("._-")
+
+
+def _format_run_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        formatted = f"{value:.6g}"
+        formatted = formatted.replace("-", "m").replace(".", "p")
+        return formatted
+    return _sanitize_run_name(str(value).replace("_", "-")).lower()
+
+
+def derive_experiment_run_name(
+    *,
+    run_name: str | None = None,
+    experiment_stage: str | None = None,
+    activation_type: str | None = None,
+    activation_positions=None,
+    activation_hparams: dict[str, Any] | None = None,
+    seed: int | None = None,
+):
+    if run_name:
+        return run_name
+
+    if activation_type in (None, "", "none"):
+        return None
+
+    stage_label = (experiment_stage or "nonlinear").replace("_", "-")
+    activation_label = str(activation_type).replace("_", "-")
+    parts = [f"stage-{stage_label}", f"act-{activation_label}"]
+
+    if activation_positions:
+        position_token = "-".join(str(int(position)) for position in activation_positions)
+        parts.append(f"pos-{position_token}")
+
+    ordered_hparams = (
+        "threshold",
+        "temperature",
+        "gain_min",
+        "gain_max",
+        "gamma",
+        "responsivity",
+        "emission_phase_mode",
+    )
+    activation_hparams = activation_hparams or {}
+    for key in ordered_hparams:
+        value = activation_hparams.get(key)
+        if value is None:
+            continue
+        token_key = key.replace("_", "-")
+        parts.append(f"{token_key}-{_format_run_value(value)}")
+
+    if seed is not None:
+        parts.append(f"seed-{seed}")
+
+    safe_name = "__".join(_sanitize_run_name(part.lower()) for part in parts if part)
+    return safe_name or None
+
+
 def checkpoint_variant_path(checkpoint_path, run_name=None):
     checkpoint_path = Path(checkpoint_path)
     if not run_name:
         return checkpoint_path
 
-    safe_name = re.sub(r"\s+", "_", str(run_name).strip())
-    safe_name = re.sub(r'[<>:"/\\|?*]+', "-", safe_name)
-    safe_name = re.sub(r'[-_]{2,}', "-", safe_name)
-    safe_name = safe_name.strip("._-")
+    safe_name = _sanitize_run_name(str(run_name))
     if not safe_name:
         return checkpoint_path
 
