@@ -416,14 +416,13 @@ def evaluate_imaging(model, loader, criterion, device):
 
 
 def resolve_imaging_optics(args):
-    default_optics = IMAGER_PAPER_OPTICS
     return resolve_optics(
-        default_optics,
+        IMAGER_PAPER_OPTICS,
         size=args.size,
         num_layers=args.layers,
-        wavelength=default_optics.wavelength if args.wavelength is None else args.wavelength,
-        layer_distance=default_optics.layer_distance if args.layer_distance is None else args.layer_distance,
-        pixel_size=default_optics.pixel_size if args.pixel_size is None else args.pixel_size,
+        wavelength=args.wavelength,
+        layer_distance=args.layer_distance,
+        pixel_size=args.pixel_size,
     )
 
 

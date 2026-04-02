@@ -172,18 +172,7 @@ class D2NN(nn.Module):
         return class_intensities
 
     def _embed_input(self, x):
-        batch = x.shape[0]
-        u = torch.zeros(batch, self.size, self.size, dtype=torch.cfloat, device=x.device)
-
-        image = x.squeeze(1)
-        target_size = self.size // 3
-        image_resized = F.interpolate(
-            image.unsqueeze(1), size=(target_size, target_size), mode="bilinear", align_corners=False
-        ).squeeze(1)
-
-        offset = (self.size - target_size) // 2
-        u[:, offset : offset + target_size, offset : offset + target_size] = image_resized.to(torch.cfloat)
-        return u
+        return embed_amplitude_image(x, self.size, target_size=self.size // 3)
 
     def export_phase_masks(self, wrap=True):
         return collect_phase_masks(self.layers, wrap=wrap)
