@@ -90,6 +90,17 @@ uv run python export_phase_plate.py --task classification --checkpoint checkpoin
 - 阶段性 checkpoint、导出包、相位文件和其他大体积实验资产，默认通过 GitHub Releases 归档与分发。
 - 进入新阶段前，先用 tag 或专用分支冻结上一阶段源码边界，再整理对应 release assets。
 
+## 分支阶段约定
+
+- `phase-only-baseline`: 保留无线性层阶段的完整可编辑主线。
+- `main`: 当前研究推进主线，已进入 nonlinear 工程。
+- `pre-nonlinear-phase-only-v1`: 非线性前的冻结快照 tag，对应纯 phase-only 阶段发布节点。
+
+当前边界约定是：
+- 需要回看、修补、重跑原始相位型主线时，使用 `phase-only-baseline`
+- 继续做 activation、位置消融和后续非线性实验时，使用 `main`
+- 每完成一个重要阶段，再补一个新的 tag 和 release，而不是回写旧阶段分支
+
 ## 论文对照结果
 
 | 任务 | 论文记录 | 当前仓库结果 | 对齐情况 |
