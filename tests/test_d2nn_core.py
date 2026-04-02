@@ -33,7 +33,13 @@ from d2nn import (
     safe_abs,
 )
 from train import build_parser
-from tasks import d2nn_mse_loss, resolve_activation_config, resolve_experiment_seed
+from tasks import (
+    build_experiment_grid,
+    d2nn_mse_loss,
+    format_experiment_grid_commands,
+    resolve_activation_config,
+    resolve_experiment_seed,
+)
 from visualize import build_parser as build_visualize_parser
 
 
@@ -363,6 +369,8 @@ class D2NNCoreTests(unittest.TestCase):
     def test_train_parser_accepts_activation_arguments(self):
         args = build_parser().parse_args(
             [
+                "--print-experiment-grid",
+                "coherent_amplitude_positions",
                 "--activation-type",
                 "coherent_amplitude",
                 "--activation-preset",
@@ -377,6 +385,7 @@ class D2NNCoreTests(unittest.TestCase):
                 "0.1",
             ]
         )
+        self.assertEqual(args.print_experiment_grid, "coherent_amplitude_positions")
         self.assertEqual(args.activation_type, "coherent_amplitude")
         self.assertEqual(args.activation_preset, "balanced")
         self.assertEqual(args.activation_placement, "mid")
@@ -495,6 +504,46 @@ class D2NNCoreTests(unittest.TestCase):
         )
         _, positions, _ = resolve_activation_config(args, None)
         self.assertEqual(positions, (2, 4))
+
+    def test_build_experiment_grid_returns_coherent_amplitude_position_sweep(self):
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "--task",
+                "classification",
+                "--dataset",
+                "fashion-mnist",
+                "--layers",
+                "5",
+                "--seed",
+                "7",
+            ]
+        )
+        grid = build_experiment_grid("coherent_amplitude_positions", args)
+        self.assertEqual(len(grid), 4)
+        self.assertEqual([item["activation_placement"] for item in grid], ["front", "mid", "back", "all"])
+        self.assertTrue(all(item["activation_type"] == "coherent_amplitude" for item in grid))
+        self.assertTrue(all(item["activation_preset"] == "balanced" for item in grid))
+        self.assertTrue(all(item["experiment_stage"] == "placement_ablation" for item in grid))
+        self.assertTrue(all(item["seed"] == 7 for item in grid))
+
+    def test_format_experiment_grid_commands_renders_train_commands(self):
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "--task",
+                "classification",
+                "--dataset",
+                "fashion-mnist",
+                "--layers",
+                "5",
+            ]
+        )
+        commands = format_experiment_grid_commands("coherent_amplitude_positions", args)
+        self.assertEqual(len(commands), 4)
+        self.assertIn("python train.py", commands[0])
+        self.assertIn("--activation-placement front", commands[0])
+        self.assertIn("--activation-preset balanced", commands[0])
 
     def test_resolve_optics_uses_checkpoint_architecture_when_missing(self):
         state_dict = {

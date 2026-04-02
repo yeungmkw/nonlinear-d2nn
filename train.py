@@ -9,7 +9,7 @@ import random
 import numpy as np
 import torch
 
-from tasks import run_classification_training, run_imaging_training
+from tasks import format_experiment_grid_commands, run_classification_training, run_imaging_training
 
 
 def seed_everything(seed):
@@ -38,6 +38,13 @@ def build_parser():
     parser.add_argument("--lr", type=float, default=0.01)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--save-dir", type=str, default="checkpoints")
+    parser.add_argument(
+        "--print-experiment-grid",
+        type=str,
+        default=None,
+        choices=["coherent_amplitude_positions", "coherent_amplitude_presets"],
+        help="print a predefined experiment command grid and exit",
+    )
     parser.add_argument(
         "--run-name",
         type=str,
@@ -95,6 +102,10 @@ def main(argv=None):
     args = build_parser().parse_args(argv)
     if args.task == "imaging" and args.dataset == "mnist":
         args.dataset = "stl10"
+    if args.print_experiment_grid:
+        for command in format_experiment_grid_commands(args.print_experiment_grid, args):
+            print(command)
+        return
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")

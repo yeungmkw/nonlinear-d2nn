@@ -176,6 +176,67 @@ def format_activation_diagnostics(diagnostics):
     return " | ".join(parts)
 
 
+def build_experiment_grid(grid_name, args):
+    base = {
+        "task": args.task,
+        "dataset": args.dataset,
+        "layers": args.layers,
+        "size": args.size,
+        "epochs": args.epochs,
+        "batch_size": args.batch_size,
+        "lr": args.lr,
+        "seed": args.seed,
+    }
+
+    if grid_name == "coherent_amplitude_positions":
+        return [
+            {
+                **base,
+                "experiment_stage": "placement_ablation",
+                "activation_type": "coherent_amplitude",
+                "activation_preset": "balanced",
+                "activation_placement": placement,
+            }
+            for placement in ("front", "mid", "back", "all")
+        ]
+
+    if grid_name == "coherent_amplitude_presets":
+        return [
+            {
+                **base,
+                "experiment_stage": "mechanism_tuning",
+                "activation_type": "coherent_amplitude",
+                "activation_preset": preset,
+                "activation_placement": "mid",
+            }
+            for preset in ("conservative", "balanced", "aggressive")
+        ]
+
+    raise ValueError(f"Unsupported experiment grid: {grid_name}")
+
+
+def format_experiment_grid_commands(grid_name, args):
+    commands = []
+    for spec in build_experiment_grid(grid_name, args):
+        command_parts = [
+            "python train.py",
+            f"--task {spec['task']}",
+            f"--dataset {spec['dataset']}",
+            f"--epochs {spec['epochs']}",
+            f"--layers {spec['layers']}",
+            f"--size {spec['size']}",
+            f"--batch-size {spec['batch_size']}",
+            f"--lr {spec['lr']}",
+            f"--seed {spec['seed']}",
+            f"--experiment-stage {spec['experiment_stage']}",
+            f"--activation-type {spec['activation_type']}",
+            f"--activation-preset {spec['activation_preset']}",
+            f"--activation-placement {spec['activation_placement']}",
+        ]
+        commands.append(" ".join(command_parts))
+    return commands
+
+
 def train_classification_one_epoch(model, loader, optimizer, device, num_classes=10):
     model.train()
     total_loss = 0.0
