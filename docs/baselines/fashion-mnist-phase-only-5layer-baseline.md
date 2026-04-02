@@ -26,6 +26,7 @@ This document freezes the baseline used as the control group before adding any n
 - Architecture inferred from the copied checkpoint: `5 layers`, `size = 200`
 - Freeze method: copied from the validated Fashion-MNIST checkpoint after the propagation-path refactor
 - Purpose: stable control group for nonlinear-mechanism and placement ablations
+- Editable phase-mask exports are versioned under `docs/baselines/fashion-mnist-phase-only-5layer-phase-masks/`
 
 ## Reproduction Command
 
@@ -45,4 +46,5 @@ uv run python train.py \
 
 - The checkpoint itself is intentionally gitignored because trained artifacts are stored locally.
 - This document is the tracked baseline record inside the repository.
+- The checked-in CSV phase masks preserve an editable reference for the pre-nonlinear stage even after later code diverges.
 - Later nonlinear experiments should compare against this baseline before changing any other variable.
