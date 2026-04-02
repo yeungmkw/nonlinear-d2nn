@@ -48,6 +48,47 @@ CLASSIFICATION_DATASETS = {
 }
 
 
+def parse_activation_positions(value):
+    if value in (None, "", ()):
+        return ()
+
+    if isinstance(value, str):
+        parts = [part.strip() for part in value.split(",") if part.strip()]
+        return tuple(int(part) for part in parts)
+
+    return tuple(int(part) for part in value)
+
+
+def activation_hparams_from_args(args):
+    return {
+        key: value
+        for key, value in {
+            "threshold": args.activation_threshold,
+            "temperature": args.activation_temperature,
+            "gamma": args.activation_gamma,
+            "responsivity": args.activation_responsivity,
+            "emission_phase_mode": args.activation_emission_phase_mode,
+        }.items()
+        if value is not None
+    }
+
+
+def resolve_activation_config(args=None, manifest=None):
+    explicit_type = getattr(args, "activation_type", None) if args is not None else None
+    explicit_positions = getattr(args, "activation_positions", None) if args is not None else None
+    explicit_hparams = activation_hparams_from_args(args) if args is not None else {}
+
+    manifest = manifest or {}
+    activation_type = explicit_type or manifest.get("activation_type") or "none"
+    activation_positions = (
+        parse_activation_positions(explicit_positions)
+        if explicit_positions is not None
+        else parse_activation_positions(manifest.get("activation_positions"))
+    )
+    activation_hparams = explicit_hparams or dict(manifest.get("activation_hparams") or {})
+    return activation_type, activation_positions, activation_hparams
+
+
 def get_classification_dataset_config(dataset_name):
     dataset_key = dataset_name.lower().replace("-", "_")
     if dataset_key not in CLASSIFICATION_DATASETS:
@@ -145,7 +186,14 @@ def run_classification_training(args, device, data_dir, save_dir):
         layer_distance=args.layer_distance,
         pixel_size=args.pixel_size,
     )
-    model = build_model_for_task("classification", optics).to(device)
+    activation_type, activation_positions, activation_hparams = resolve_activation_config(args)
+    model = build_model_for_task(
+        "classification",
+        optics,
+        activation_type=activation_type,
+        activation_positions=activation_positions,
+        activation_hparams=activation_hparams,
+    ).to(device)
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"D2NN: {args.layers} layers, {args.size}x{args.size} neurons/layer, {total_params} trainable params")
 
@@ -194,6 +242,9 @@ def run_classification_training(args, device, data_dir, save_dir):
                 experiment_stage=args.experiment_stage,
                 seed=args.seed,
                 optics=optics,
+                activation_type=activation_type,
+                activation_positions=activation_positions,
+                activation_hparams=activation_hparams,
             ),
         },
     )
@@ -286,6 +337,7 @@ def plot_confusion_matrix(model, test_loader, device, class_names, save_path=Non
 def run_classification_visualization(args):
     dataset_cfg = get_classification_dataset_config(args.dataset)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    manifest = read_checkpoint_manifest(args.checkpoint)
     state_dict = load_checkpoint_state_dict(args.checkpoint, map_location=device)
 
     optics = resolve_optics(
@@ -297,7 +349,14 @@ def run_classification_visualization(args):
         layer_distance=args.layer_distance,
         pixel_size=args.pixel_size,
     )
-    model = build_model_for_task("classification", optics).to(device)
+    activation_type, activation_positions, activation_hparams = resolve_activation_config(manifest=manifest)
+    model = build_model_for_task(
+        "classification",
+        optics,
+        activation_type=activation_type,
+        activation_positions=activation_positions,
+        activation_hparams=activation_hparams,
+    ).to(device)
     model.load_state_dict(state_dict)
     model.eval()
 
@@ -448,7 +507,15 @@ def run_imaging_training(args, device, data_dir, save_dir):
     test_loader = DataLoader(dataset_cfg["test_set"], batch_size=args.batch_size, shuffle=False, num_workers=0)
 
     optics = resolve_imaging_optics(args)
-    model = build_model_for_task("imaging", optics, input_fraction=args.input_fraction).to(device)
+    activation_type, activation_positions, activation_hparams = resolve_activation_config(args)
+    model = build_model_for_task(
+        "imaging",
+        optics,
+        input_fraction=args.input_fraction,
+        activation_type=activation_type,
+        activation_positions=activation_positions,
+        activation_hparams=activation_hparams,
+    ).to(device)
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"D2NNImager: {args.layers} layers, {args.size}x{args.size}, {total_params} trainable params")
 
@@ -497,6 +564,9 @@ def run_imaging_training(args, device, data_dir, save_dir):
                 experiment_stage=args.experiment_stage,
                 seed=args.seed,
                 optics=optics,
+                activation_type=activation_type,
+                activation_positions=activation_positions,
+                activation_hparams=activation_hparams,
             ),
         },
     )
@@ -588,7 +658,15 @@ def run_imaging_visualization(args):
         layer_distance=args.layer_distance,
         pixel_size=args.pixel_size,
     )
-    model = build_model_for_task("imaging", optics, input_fraction=args.input_fraction).to(device)
+    activation_type, activation_positions, activation_hparams = resolve_activation_config(manifest=manifest)
+    model = build_model_for_task(
+        "imaging",
+        optics,
+        input_fraction=args.input_fraction,
+        activation_type=activation_type,
+        activation_positions=activation_positions,
+        activation_hparams=activation_hparams,
+    ).to(device)
     model.load_state_dict(state_dict)
     model.eval()
 

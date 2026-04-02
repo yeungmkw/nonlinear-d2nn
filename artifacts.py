@@ -120,11 +120,30 @@ def resolve_optics(
     )
 
 
-def build_model_for_task(task, optics, *, input_fraction=0.5, num_classes=10):
+def build_model_for_task(
+    task,
+    optics,
+    *,
+    input_fraction=0.5,
+    num_classes=10,
+    activation_type="none",
+    activation_positions=None,
+    activation_hparams=None,
+):
     if task == "classification":
-        return D2NN(**optics.classifier_model_kwargs(num_classes=num_classes))
+        return D2NN(
+            **optics.classifier_model_kwargs(num_classes=num_classes),
+            activation_type=activation_type,
+            activation_positions=activation_positions,
+            activation_hparams=activation_hparams,
+        )
     if task == "imaging":
-        return D2NNImager(**optics.imager_model_kwargs(input_fraction=input_fraction))
+        return D2NNImager(
+            **optics.imager_model_kwargs(input_fraction=input_fraction),
+            activation_type=activation_type,
+            activation_positions=activation_positions,
+            activation_hparams=activation_hparams,
+        )
     raise ValueError(f"Unsupported task: {task}")
 
 
@@ -154,12 +173,18 @@ def experiment_manifest_fields(
     experiment_stage=None,
     seed=None,
     optics: OpticalConfig | None = None,
+    activation_type=None,
+    activation_positions=None,
+    activation_hparams=None,
 ):
     payload = {
         "checkpoint": str(Path(checkpoint_path)),
         "run_name": run_name,
         "experiment_stage": experiment_stage,
         "seed": seed,
+        "activation_type": activation_type,
+        "activation_positions": list(activation_positions or ()),
+        "activation_hparams": dict(activation_hparams or {}),
     }
     if optics is not None:
         payload["optical_config"] = optical_config_dict(optics)

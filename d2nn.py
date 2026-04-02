@@ -11,6 +11,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+def safe_abs(u, eps=1e-8):
+    """Stable complex magnitude used by future nonlinear activations."""
+    return torch.sqrt(u.real**2 + u.imag**2 + eps)
+
+
 def embed_amplitude_image(x, size, target_size=None):
     """Embed a grayscale image batch into the center of a complex optical field."""
     batch = x.shape[0]
@@ -47,14 +52,60 @@ def phase_to_height_map(phase_masks, wavelength, refractive_index, ambient_index
     return phase_masks * wavelength / (2 * np.pi * delta_n)
 
 
-def propagate_output_field(u, layers, transfer_function):
+def propagate_output_field(u, layers, transfer_function, activations=None):
     """Propagate a complex field through diffractive layers to the output plane."""
-    for layer in layers:
+    for layer_idx, layer in enumerate(layers, start=1):
         u = layer(u)
+        if activations is not None:
+            key = str(layer_idx)
+            if key in activations:
+                u = activations[key](u)
 
     spectrum = torch.fft.fft2(u)
     spectrum = spectrum * transfer_function.unsqueeze(0)
     return torch.fft.ifft2(spectrum)
+
+
+class FieldActivationBase(nn.Module):
+    """Base interface for optional field activations inserted between layers."""
+
+    def forward(self, u):
+        raise NotImplementedError
+
+
+class IdentityActivation(FieldActivationBase):
+    """No-op activation used to verify nonlinear placement plumbing."""
+
+    def forward(self, u):
+        return u
+
+
+def normalize_activation_positions(positions, num_layers):
+    """Normalize 1-based layer indices used for inter-layer activation placement."""
+    if positions in (None, "", ()):
+        return ()
+
+    if isinstance(positions, str):
+        parts = [part.strip() for part in positions.split(",") if part.strip()]
+        positions = tuple(int(part) for part in parts)
+    else:
+        positions = tuple(int(position) for position in positions)
+
+    normalized = []
+    for position in positions:
+        if position < 1 or position > num_layers:
+            raise ValueError(f"activation position {position} is outside 1..{num_layers}")
+        if position not in normalized:
+            normalized.append(position)
+    return tuple(normalized)
+
+
+def build_activation_module(activation_type):
+    if activation_type in (None, "none"):
+        return None
+    if activation_type == "identity":
+        return IdentityActivation()
+    raise ValueError(f"Unsupported activation type: {activation_type}")
 
 
 class DiffractiveLayer(nn.Module):
@@ -101,14 +152,26 @@ class D2NN(nn.Module):
         layer_distance=30e-3,
         pixel_size=0.4e-3,
         detector_size=None,
+        activation_type="none",
+        activation_positions=None,
+        activation_hparams=None,
     ):
         super().__init__()
         self.size = size
         self.num_classes = num_classes
+        self.activation_type = activation_type or "none"
+        self.activation_positions = normalize_activation_positions(activation_positions, num_layers)
+        self.activation_hparams = dict(activation_hparams or {})
 
         self.layers = nn.ModuleList(
             [DiffractiveLayer(size, wavelength, layer_distance, pixel_size) for _ in range(num_layers)]
         )
+        self.activations = nn.ModuleDict()
+        if self.activation_type != "none":
+            for position in self.activation_positions:
+                activation = build_activation_module(self.activation_type)
+                if activation is not None:
+                    self.activations[str(position)] = activation
         self.register_buffer(
             "H_out",
             self._build_output_transfer(size, wavelength, layer_distance, pixel_size),
@@ -151,7 +214,7 @@ class D2NN(nn.Module):
         return self.detect_from_intensity(self.output_intensity(x))
 
     def propagate_embedded_field(self, u):
-        return propagate_output_field(u, self.layers, self.H_out)
+        return propagate_output_field(u, self.layers, self.H_out, self.activations)
 
     def propagate_field(self, x):
         return self.propagate_embedded_field(self._embed_input(x))
@@ -189,14 +252,26 @@ class D2NNImager(nn.Module):
         layer_distance=4e-3,
         pixel_size=0.3e-3,
         input_fraction=0.5,
+        activation_type="none",
+        activation_positions=None,
+        activation_hparams=None,
     ):
         super().__init__()
         self.size = size
         self.input_fraction = input_fraction
+        self.activation_type = activation_type or "none"
+        self.activation_positions = normalize_activation_positions(activation_positions, num_layers)
+        self.activation_hparams = dict(activation_hparams or {})
 
         self.layers = nn.ModuleList(
             [DiffractiveLayer(size, wavelength, layer_distance, pixel_size) for _ in range(num_layers)]
         )
+        self.activations = nn.ModuleDict()
+        if self.activation_type != "none":
+            for position in self.activation_positions:
+                activation = build_activation_module(self.activation_type)
+                if activation is not None:
+                    self.activations[str(position)] = activation
         self.register_buffer(
             "H_out",
             D2NN._build_output_transfer(size, wavelength, layer_distance, pixel_size),
@@ -208,7 +283,7 @@ class D2NNImager(nn.Module):
         return intensity / max_vals
 
     def propagate_embedded_field(self, u):
-        return propagate_output_field(u, self.layers, self.H_out)
+        return propagate_output_field(u, self.layers, self.H_out, self.activations)
 
     def propagate_field(self, x):
         return self.propagate_embedded_field(self._embed_input(x))

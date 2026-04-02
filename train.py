@@ -51,6 +51,24 @@ def build_parser():
         help="high-level experiment stage label recorded in manifests",
     )
     parser.add_argument("--seed", type=int, default=42, help="random seed for splits, loaders, and training")
+    parser.add_argument(
+        "--activation-type",
+        type=str,
+        default="none",
+        choices=["none", "identity"],
+        help="optional field activation inserted after selected diffractive layers",
+    )
+    parser.add_argument(
+        "--activation-positions",
+        type=str,
+        default=None,
+        help="comma-separated 1-based layer indices after which activations are inserted",
+    )
+    parser.add_argument("--activation-threshold", type=float, default=None)
+    parser.add_argument("--activation-temperature", type=float, default=None)
+    parser.add_argument("--activation-gamma", type=float, default=None)
+    parser.add_argument("--activation-responsivity", type=float, default=None)
+    parser.add_argument("--activation-emission-phase-mode", type=str, default=None)
     parser.add_argument("--wavelength", type=float, default=None)
     parser.add_argument("--layer-distance", type=float, default=None)
     parser.add_argument("--pixel-size", type=float, default=None)

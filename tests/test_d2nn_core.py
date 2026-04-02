@@ -23,9 +23,9 @@ from artifacts import (
     quantize_height_map,
     build_layer_stats,
 )
-from d2nn import D2NN, D2NNImager, phase_to_height_map
+from d2nn import D2NN, D2NNImager, IdentityActivation, phase_to_height_map, safe_abs
 from train import build_parser
-from tasks import resolve_experiment_seed
+from tasks import d2nn_mse_loss, resolve_experiment_seed
 from visualize import build_parser as build_visualize_parser
 
 
@@ -116,6 +116,71 @@ class D2NNCoreTests(unittest.TestCase):
         self.assertEqual(intensity.shape, (2, 20, 20))
         self.assertTrue(torch.allclose(expected, model(x), atol=1e-5, rtol=1e-4))
 
+    def test_safe_abs_avoids_zero_gradient_singularity(self):
+        x = torch.zeros(2, 3, dtype=torch.cfloat)
+        magnitude = safe_abs(x)
+        self.assertEqual(magnitude.shape, (2, 3))
+        self.assertTrue(torch.all(magnitude > 0))
+
+    def test_identity_activation_preserves_complex_field(self):
+        activation = IdentityActivation()
+        u = torch.randn(2, 8, 8, dtype=torch.cfloat)
+        self.assertTrue(torch.equal(activation(u), u))
+
+    def test_classifier_identity_activation_matches_baseline_forward(self):
+        optics = CLASSIFIER_PAPER_OPTICS.with_overrides(size=24, num_layers=3)
+        baseline = D2NN(**optics.classifier_model_kwargs())
+        nonlinear = D2NN(
+            **optics.classifier_model_kwargs(),
+            activation_type="identity",
+            activation_positions=(1, 3),
+        )
+        nonlinear.load_state_dict(baseline.state_dict(), strict=True)
+
+        x = torch.rand(2, 1, 28, 28)
+        self.assertTrue(torch.allclose(nonlinear(x), baseline(x), atol=1e-6, rtol=1e-5))
+
+    def test_baseline_checkpoint_loads_into_default_activation_model(self):
+        optics = CLASSIFIER_PAPER_OPTICS.with_overrides(size=24, num_layers=3)
+        original = D2NN(**optics.classifier_model_kwargs())
+        restored = D2NN(**optics.classifier_model_kwargs())
+        restored.load_state_dict(original.state_dict(), strict=True)
+
+        x = torch.rand(2, 1, 28, 28)
+        self.assertEqual(restored(x).shape, (2, 10))
+        self.assertEqual(restored(x).dtype, torch.float32)
+        self.assertTrue(torch.allclose(restored(x), original(x), atol=1e-6, rtol=1e-5))
+
+    def test_identity_activation_supports_backward_pass(self):
+        optics = CLASSIFIER_PAPER_OPTICS.with_overrides(size=24, num_layers=2)
+        model = D2NN(
+            **optics.classifier_model_kwargs(),
+            activation_type="identity",
+            activation_positions=(1,),
+        )
+        x = torch.rand(4, 1, 28, 28)
+        target = torch.tensor([0, 1, 2, 3])
+        loss = d2nn_mse_loss(model(x), target, num_classes=10)
+        loss.backward()
+        self.assertTrue(all(layer.phase.grad is not None for layer in model.layers))
+
+    def test_imager_identity_activation_keeps_shape_and_dtype(self):
+        optics = IMAGER_PAPER_OPTICS.with_overrides(size=20, num_layers=3)
+        baseline = D2NNImager(**optics.imager_model_kwargs())
+        nonlinear = D2NNImager(
+            **optics.imager_model_kwargs(),
+            activation_type="identity",
+            activation_positions=(2,),
+        )
+        nonlinear.load_state_dict(baseline.state_dict(), strict=True)
+
+        x = torch.rand(2, 1, 8, 8)
+        baseline_out = baseline(x)
+        nonlinear_out = nonlinear(x)
+        self.assertEqual(nonlinear_out.shape, baseline_out.shape)
+        self.assertEqual(nonlinear_out.dtype, baseline_out.dtype)
+        self.assertTrue(torch.allclose(nonlinear_out, baseline_out, atol=1e-6, rtol=1e-5))
+
     def test_phase_to_height_map_requires_positive_delta_n(self):
         phases = torch.ones(2, 4, 4)
         with self.assertRaises(ValueError):
@@ -165,17 +230,35 @@ class D2NNCoreTests(unittest.TestCase):
             experiment_stage="baseline",
             seed=42,
             optics=CLASSIFIER_PAPER_OPTICS.with_overrides(size=200, num_layers=5),
+            activation_type="none",
+            activation_positions=(),
+            activation_hparams={},
         )
         self.assertEqual(payload["checkpoint"], str(Path("checkpoints/best_fashion_mnist.pth")))
         self.assertEqual(payload["run_name"], "baseline_5layer")
         self.assertEqual(payload["experiment_stage"], "baseline")
         self.assertEqual(payload["seed"], 42)
         self.assertEqual(payload["optical_config"]["num_layers"], 5)
+        self.assertEqual(payload["activation_type"], "none")
+        self.assertEqual(payload["activation_positions"], [])
+        self.assertEqual(payload["activation_hparams"], {})
 
     def test_train_parser_accepts_seed_and_experiment_stage(self):
         args = build_parser().parse_args(["--seed", "7", "--experiment-stage", "placement_ablation"])
         self.assertEqual(args.seed, 7)
         self.assertEqual(args.experiment_stage, "placement_ablation")
+
+    def test_train_parser_accepts_activation_arguments(self):
+        args = build_parser().parse_args(
+            [
+                "--activation-type",
+                "identity",
+                "--activation-positions",
+                "1,3",
+            ]
+        )
+        self.assertEqual(args.activation_type, "identity")
+        self.assertEqual(args.activation_positions, "1,3")
 
     def test_visualize_parser_accepts_seed(self):
         args = build_visualize_parser().parse_args(["--checkpoint", "checkpoints/demo.pth", "--seed", "11"])
