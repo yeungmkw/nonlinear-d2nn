@@ -64,6 +64,13 @@ def build_parser():
         default=None,
         help="comma-separated 1-based layer indices after which activations are inserted",
     )
+    parser.add_argument(
+        "--activation-preset",
+        type=str,
+        default=None,
+        choices=["conservative", "balanced", "aggressive"],
+        help="optional preset for coherent_amplitude activation hyperparameters",
+    )
     parser.add_argument("--activation-threshold", type=float, default=None)
     parser.add_argument("--activation-temperature", type=float, default=None)
     parser.add_argument("--activation-gain-min", type=float, default=None)

@@ -49,6 +49,13 @@ CLASSIFICATION_DATASETS = {
 }
 
 
+COHERENT_AMPLITUDE_PRESETS = {
+    "conservative": {"threshold": 0.25, "temperature": 0.12, "gain_min": 0.4, "gain_max": 0.98},
+    "balanced": {"threshold": 0.2, "temperature": 0.1, "gain_min": 0.25, "gain_max": 0.95},
+    "aggressive": {"threshold": 0.15, "temperature": 0.08, "gain_min": 0.1, "gain_max": 0.9},
+}
+
+
 def parse_activation_positions(value):
     if value in (None, "", ()):
         return ()
@@ -76,10 +83,21 @@ def activation_hparams_from_args(args):
     }
 
 
+def activation_preset_hparams(args=None):
+    if args is None:
+        return {}
+    activation_type = getattr(args, "activation_type", None)
+    activation_preset = getattr(args, "activation_preset", None)
+    if activation_type != "coherent_amplitude" or not activation_preset:
+        return {}
+    return dict(COHERENT_AMPLITUDE_PRESETS[activation_preset])
+
+
 def resolve_activation_config(args=None, manifest=None):
     explicit_type = getattr(args, "activation_type", None) if args is not None else None
     explicit_positions = getattr(args, "activation_positions", None) if args is not None else None
     explicit_hparams = activation_hparams_from_args(args) if args is not None else {}
+    preset_hparams = activation_preset_hparams(args)
 
     manifest = manifest or {}
     activation_type = explicit_type or manifest.get("activation_type") or "none"
@@ -88,7 +106,9 @@ def resolve_activation_config(args=None, manifest=None):
         if explicit_positions is not None
         else parse_activation_positions(manifest.get("activation_positions"))
     )
-    activation_hparams = explicit_hparams or dict(manifest.get("activation_hparams") or {})
+    activation_hparams = dict(manifest.get("activation_hparams") or {})
+    activation_hparams.update(preset_hparams)
+    activation_hparams.update(explicit_hparams)
     return activation_type, activation_positions, activation_hparams
 
 

@@ -365,6 +365,8 @@ class D2NNCoreTests(unittest.TestCase):
             [
                 "--activation-type",
                 "coherent_amplitude",
+                "--activation-preset",
+                "balanced",
                 "--activation-positions",
                 "1,3",
                 "--activation-threshold",
@@ -374,6 +376,7 @@ class D2NNCoreTests(unittest.TestCase):
             ]
         )
         self.assertEqual(args.activation_type, "coherent_amplitude")
+        self.assertEqual(args.activation_preset, "balanced")
         self.assertEqual(args.activation_positions, "1,3")
         self.assertAlmostEqual(args.activation_threshold, 0.2)
         self.assertAlmostEqual(args.activation_temperature, 0.1)
@@ -413,6 +416,49 @@ class D2NNCoreTests(unittest.TestCase):
         self.assertEqual(activation_type, "identity")
         self.assertEqual(positions, (2,))
         self.assertEqual(hparams, {"threshold": 0.2})
+
+    def test_resolve_activation_config_applies_coherent_amplitude_preset_defaults(self):
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "--activation-type",
+                "coherent_amplitude",
+                "--activation-preset",
+                "balanced",
+                "--activation-positions",
+                "2",
+            ]
+        )
+        activation_type, positions, hparams = resolve_activation_config(args, None)
+        self.assertEqual(activation_type, "coherent_amplitude")
+        self.assertEqual(positions, (2,))
+        self.assertEqual(
+            hparams,
+            {
+                "threshold": 0.2,
+                "temperature": 0.1,
+                "gain_min": 0.25,
+                "gain_max": 0.95,
+            },
+        )
+
+    def test_resolve_activation_config_lets_explicit_args_override_preset(self):
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "--activation-type",
+                "coherent_amplitude",
+                "--activation-preset",
+                "balanced",
+                "--activation-threshold",
+                "0.3",
+            ]
+        )
+        _, _, hparams = resolve_activation_config(args, None)
+        self.assertEqual(hparams["threshold"], 0.3)
+        self.assertEqual(hparams["temperature"], 0.1)
+        self.assertEqual(hparams["gain_min"], 0.25)
+        self.assertEqual(hparams["gain_max"], 0.95)
 
     def test_resolve_optics_uses_checkpoint_architecture_when_missing(self):
         state_dict = {
