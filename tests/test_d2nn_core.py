@@ -26,6 +26,7 @@ from artifacts import (
 )
 from d2nn import (
     CoherentAmplitudeActivation,
+    CoherentPhaseActivation,
     D2NN,
     D2NNImager,
     IdentityActivation,
@@ -178,6 +179,26 @@ class D2NNCoreTests(unittest.TestCase):
         self.assertGreaterEqual(activation.last_stats["mean_gain"], 0.1)
         self.assertLessEqual(activation.last_stats["mean_gain"], 0.9)
 
+    def test_coherent_phase_activation_preserves_magnitude_and_applies_intensity_phase_shift(self):
+        activation = CoherentPhaseActivation(gamma=0.5)
+        u = torch.tensor([[[1.0 + 0j, 1.0j]]], dtype=torch.cfloat)
+
+        out = activation(u)
+        expected_shift = 0.5 * (safe_abs(u) ** 2)
+        phase_delta = torch.angle(out / u)
+
+        self.assertTrue(torch.allclose(safe_abs(out), safe_abs(u), atol=1e-6, rtol=1e-6))
+        self.assertTrue(torch.allclose(phase_delta, expected_shift, atol=1e-5, rtol=1e-5))
+
+    def test_coherent_phase_activation_records_phase_stats(self):
+        activation = CoherentPhaseActivation(gamma=0.25)
+        u = torch.full((1, 2, 2), 2.0 + 0j, dtype=torch.cfloat)
+        _ = activation(u)
+
+        self.assertIn("mean_intensity", activation.last_stats)
+        self.assertIn("mean_phase_shift", activation.last_stats)
+        self.assertGreater(activation.last_stats["mean_phase_shift"], 0.0)
+
     def test_classifier_identity_activation_matches_baseline_forward(self):
         optics = CLASSIFIER_PAPER_OPTICS.with_overrides(size=24, num_layers=3)
         baseline = D2NN(**optics.classifier_model_kwargs())
@@ -222,6 +243,20 @@ class D2NNCoreTests(unittest.TestCase):
             activation_type="coherent_amplitude",
             activation_positions=(1,),
             activation_hparams={"threshold": 0.2, "temperature": 0.1, "gain_min": 0.1, "gain_max": 0.9},
+        )
+        x = torch.rand(4, 1, 28, 28)
+        target = torch.tensor([0, 1, 2, 3])
+        loss = d2nn_mse_loss(model(x), target, num_classes=10)
+        loss.backward()
+        self.assertTrue(all(layer.phase.grad is not None for layer in model.layers))
+
+    def test_classifier_coherent_phase_activation_supports_backward_pass(self):
+        optics = CLASSIFIER_PAPER_OPTICS.with_overrides(size=24, num_layers=2)
+        model = D2NN(
+            **optics.classifier_model_kwargs(),
+            activation_type="coherent_phase",
+            activation_positions=(1,),
+            activation_hparams={"gamma": 0.25},
         )
         x = torch.rand(4, 1, 28, 28)
         target = torch.tensor([0, 1, 2, 3])
@@ -372,26 +407,23 @@ class D2NNCoreTests(unittest.TestCase):
                 "--print-experiment-grid",
                 "coherent_amplitude_positions",
                 "--activation-type",
-                "coherent_amplitude",
+                "coherent_phase",
                 "--activation-preset",
                 "balanced",
                 "--activation-placement",
                 "mid",
                 "--activation-positions",
                 "1,3",
-                "--activation-threshold",
-                "0.2",
-                "--activation-temperature",
-                "0.1",
+                "--activation-gamma",
+                "0.25",
             ]
         )
         self.assertEqual(args.print_experiment_grid, "coherent_amplitude_positions")
-        self.assertEqual(args.activation_type, "coherent_amplitude")
+        self.assertEqual(args.activation_type, "coherent_phase")
         self.assertEqual(args.activation_preset, "balanced")
         self.assertEqual(args.activation_placement, "mid")
         self.assertEqual(args.activation_positions, "1,3")
-        self.assertAlmostEqual(args.activation_threshold, 0.2)
-        self.assertAlmostEqual(args.activation_temperature, 0.1)
+        self.assertAlmostEqual(args.activation_gamma, 0.25)
 
     def test_visualize_parser_accepts_seed(self):
         args = build_visualize_parser().parse_args(["--checkpoint", "checkpoints/demo.pth", "--seed", "11"])

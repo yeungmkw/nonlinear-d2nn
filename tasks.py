@@ -169,6 +169,8 @@ def format_activation_diagnostics(diagnostics):
         summary = []
         if "mean_gain" in stats:
             summary.append(f"gain={stats['mean_gain']:.3f}")
+        if "mean_phase_shift" in stats:
+            summary.append(f"dphi={stats['mean_phase_shift']:.3f}")
         if "mean_intensity" in stats:
             summary.append(f"I={stats['mean_intensity']:.3f}")
         if summary:

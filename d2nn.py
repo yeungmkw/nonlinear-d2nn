@@ -112,6 +112,25 @@ class CoherentAmplitudeActivation(FieldActivationBase):
         return gain.to(dtype=u.real.dtype) * u
 
 
+class CoherentPhaseActivation(FieldActivationBase):
+    """Intensity-dependent phase modulation that preserves the field magnitude."""
+
+    def __init__(self, gamma=0.1):
+        super().__init__()
+        self.gamma = float(gamma)
+
+    def forward(self, u):
+        intensity = safe_abs(u) ** 2
+        phase_shift = self.gamma * intensity
+        self.last_stats = {
+            "mean_intensity": float(intensity.mean().detach().cpu()),
+            "mean_phase_shift": float(phase_shift.mean().detach().cpu()),
+            "max_phase_shift": float(phase_shift.max().detach().cpu()),
+            "min_phase_shift": float(phase_shift.min().detach().cpu()),
+        }
+        return u * torch.exp(1j * phase_shift)
+
+
 def normalize_activation_positions(positions, num_layers):
     """Normalize 1-based layer indices used for inter-layer activation placement."""
     if positions in (None, "", ()):
@@ -140,6 +159,8 @@ def build_activation_module(activation_type, activation_hparams=None):
         return IdentityActivation()
     if activation_type == "coherent_amplitude":
         return CoherentAmplitudeActivation(**activation_hparams)
+    if activation_type == "coherent_phase":
+        return CoherentPhaseActivation(**activation_hparams)
     raise ValueError(f"Unsupported activation type: {activation_type}")
 
 
