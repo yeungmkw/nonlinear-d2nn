@@ -65,6 +65,13 @@ def build_parser():
         help="comma-separated 1-based layer indices after which activations are inserted",
     )
     parser.add_argument(
+        "--activation-placement",
+        type=str,
+        default=None,
+        choices=["front", "mid", "back", "all"],
+        help="named placement alias resolved from the current layer count",
+    )
+    parser.add_argument(
         "--activation-preset",
         type=str,
         default=None,

@@ -67,6 +67,20 @@ def parse_activation_positions(value):
     return tuple(int(part) for part in value)
 
 
+def resolve_activation_positions_from_alias(alias, num_layers):
+    if not alias or num_layers is None:
+        return ()
+    if alias == "front":
+        return (1,)
+    if alias == "mid":
+        return ((int(num_layers) + 1) // 2,)
+    if alias == "back":
+        return (int(num_layers),)
+    if alias == "all":
+        return tuple(range(1, int(num_layers) + 1))
+    raise ValueError(f"Unsupported activation placement alias: {alias}")
+
+
 def activation_hparams_from_args(args):
     return {
         key: value
@@ -96,15 +110,23 @@ def activation_preset_hparams(args=None):
 def resolve_activation_config(args=None, manifest=None):
     explicit_type = getattr(args, "activation_type", None) if args is not None else None
     explicit_positions = getattr(args, "activation_positions", None) if args is not None else None
+    explicit_placement = getattr(args, "activation_placement", None) if args is not None else None
     explicit_hparams = activation_hparams_from_args(args) if args is not None else {}
     preset_hparams = activation_preset_hparams(args)
 
     manifest = manifest or {}
     activation_type = explicit_type or manifest.get("activation_type") or "none"
+    num_layers = getattr(args, "layers", None) if args is not None else None
+    if num_layers is None:
+        num_layers = ((manifest.get("optical_config") or {}).get("num_layers"))
     activation_positions = (
         parse_activation_positions(explicit_positions)
         if explicit_positions is not None
-        else parse_activation_positions(manifest.get("activation_positions"))
+        else (
+            resolve_activation_positions_from_alias(explicit_placement, num_layers)
+            if explicit_placement is not None
+            else parse_activation_positions(manifest.get("activation_positions"))
+        )
     )
     activation_hparams = dict(manifest.get("activation_hparams") or {})
     activation_hparams.update(preset_hparams)

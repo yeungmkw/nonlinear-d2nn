@@ -367,6 +367,8 @@ class D2NNCoreTests(unittest.TestCase):
                 "coherent_amplitude",
                 "--activation-preset",
                 "balanced",
+                "--activation-placement",
+                "mid",
                 "--activation-positions",
                 "1,3",
                 "--activation-threshold",
@@ -377,6 +379,7 @@ class D2NNCoreTests(unittest.TestCase):
         )
         self.assertEqual(args.activation_type, "coherent_amplitude")
         self.assertEqual(args.activation_preset, "balanced")
+        self.assertEqual(args.activation_placement, "mid")
         self.assertEqual(args.activation_positions, "1,3")
         self.assertAlmostEqual(args.activation_threshold, 0.2)
         self.assertAlmostEqual(args.activation_temperature, 0.1)
@@ -459,6 +462,39 @@ class D2NNCoreTests(unittest.TestCase):
         self.assertEqual(hparams["temperature"], 0.1)
         self.assertEqual(hparams["gain_min"], 0.25)
         self.assertEqual(hparams["gain_max"], 0.95)
+
+    def test_resolve_activation_config_maps_mid_placement_alias(self):
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "--layers",
+                "5",
+                "--activation-type",
+                "coherent_amplitude",
+                "--activation-placement",
+                "mid",
+            ]
+        )
+        activation_type, positions, _ = resolve_activation_config(args, None)
+        self.assertEqual(activation_type, "coherent_amplitude")
+        self.assertEqual(positions, (3,))
+
+    def test_resolve_activation_config_explicit_positions_override_placement_alias(self):
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "--layers",
+                "5",
+                "--activation-type",
+                "coherent_amplitude",
+                "--activation-placement",
+                "mid",
+                "--activation-positions",
+                "2,4",
+            ]
+        )
+        _, positions, _ = resolve_activation_config(args, None)
+        self.assertEqual(positions, (2, 4))
 
     def test_resolve_optics_uses_checkpoint_architecture_when_missing(self):
         state_dict = {
