@@ -84,6 +84,12 @@ uv run python export_phase_plate.py --task classification --checkpoint checkpoin
 - 如果要看成像链路，使用 `checkpoints/best_imager_stl10.pth`
 - 不要把 `checkpoints/best_mnist.pth` 当作当前 paper-faithful 主线，它现在实际是 `3 层 / 100x100`
 
+## 阶段产物管理
+
+- 源码仓库默认保留源码、文档、manifest 和小体积可编辑参考文件，例如 `docs/baselines/` 下的 phase CSV。
+- 阶段性 checkpoint、导出包、相位文件和其他大体积实验资产，默认通过 GitHub Releases 归档与分发。
+- 进入新阶段前，先用 tag 或专用分支冻结上一阶段源码边界，再整理对应 release assets。
+
 ## 论文对照结果
 
 | 任务 | 论文记录 | 当前仓库结果 | 对齐情况 |
