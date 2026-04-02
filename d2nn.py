@@ -5,10 +5,10 @@ Reproducing: "All-optical machine learning using diffractive deep neural network
 Lin et al., Science 361, 1004-1008 (2018)
 """
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
 
 
 def embed_amplitude_image(x, size, target_size=None):
@@ -47,135 +47,95 @@ def phase_to_height_map(phase_masks, wavelength, refractive_index, ambient_index
     return phase_masks * wavelength / (2 * np.pi * delta_n)
 
 
+def propagate_output_field(u, layers, transfer_function):
+    """Propagate a complex field through diffractive layers to the output plane."""
+    for layer in layers:
+        u = layer(u)
+
+    spectrum = torch.fft.fft2(u)
+    spectrum = spectrum * transfer_function.unsqueeze(0)
+    return torch.fft.ifft2(spectrum)
+
+
 class DiffractiveLayer(nn.Module):
-    """单个衍射层：每个像素点作为一个神经元，可学习的相位调制。"""
+    """Single diffractive layer with learnable phase modulation."""
 
     def __init__(self, size, wavelength, layer_distance, pixel_size):
-        """
-        Args:
-            size: 层的像素数 (size x size)
-            wavelength: 工作波长 (m)
-            layer_distance: 到下一层的距离 (m)
-            pixel_size: 像素间距 (m)
-        """
         super().__init__()
         self.size = size
         self.wavelength = wavelength
         self.layer_distance = layer_distance
         self.pixel_size = pixel_size
 
-        # 可学习参数：每个神经元的相位值
         self.phase = nn.Parameter(torch.randn(size, size) * 0.05)
-
-        # 预计算自由空间传播的传递函数 (Angular Spectrum Method)
         self.register_buffer("H", self._build_transfer_function())
 
     def _build_transfer_function(self):
-        """角谱法 (Angular Spectrum Method) 的传递函数。"""
-        k = 2 * np.pi / self.wavelength
         fx = torch.fft.fftfreq(self.size, d=self.pixel_size)
         fy = torch.fft.fftfreq(self.size, d=self.pixel_size)
         FX, FY = torch.meshgrid(fx, fy, indexing="ij")
 
-        # 传播相位: sqrt(k^2 - kx^2 - ky^2) * z
         sq = (1.0 / self.wavelength) ** 2 - FX**2 - FY**2
-        # 倏逝波置零
         propagating = sq > 0
         kz = torch.sqrt(torch.clamp(sq, min=0))
-        H = torch.exp(1j * 2 * np.pi * kz * self.layer_distance) * propagating
-        return H
+        return torch.exp(1j * 2 * np.pi * kz * self.layer_distance) * propagating
 
     def forward(self, u):
-        """
-        前向传播：相位调制 -> 自由空间衍射传播。
+        modulation = torch.exp(1j * self.phase)
+        u = u * modulation.unsqueeze(0)
 
-        Args:
-            u: 输入复数光场 (batch, size, size)
-        Returns:
-            传播后的复数光场 (batch, size, size)
-        """
-        # 相位调制
-        modulation = torch.exp(1j * self.phase)  # (size, size)
-        u = u * modulation.unsqueeze(0)  # (batch, size, size)
-
-        # 角谱传播
-        U = torch.fft.fft2(u)
-        U = U * self.H.unsqueeze(0)
-        u = torch.fft.ifft2(U)
-        return u
+        spectrum = torch.fft.fft2(u)
+        spectrum = spectrum * self.H.unsqueeze(0)
+        return torch.fft.ifft2(spectrum)
 
 
 class D2NN(nn.Module):
-    """完整的衍射深度神经网络。"""
+    """Diffractive classifier."""
 
     def __init__(
         self,
         num_layers=5,
         size=200,
         num_classes=10,
-        wavelength=0.75e-3,       # 0.4 THz -> 0.75 mm
-        layer_distance=30e-3,     # 3 cm
-        pixel_size=0.4e-3,        # 0.4 mm
+        wavelength=0.75e-3,
+        layer_distance=30e-3,
+        pixel_size=0.4e-3,
         detector_size=None,
     ):
-        """
-        Args:
-            num_layers: 衍射层数
-            size: 每层像素分辨率 (size x size)
-            num_classes: 分类数
-            wavelength: 工作波长 (m)
-            layer_distance: 层间距 (m)
-            pixel_size: 像素间距 (m)
-            detector_size: 每个检测器区域的像素数 (自动计算)
-        """
         super().__init__()
         self.size = size
         self.num_classes = num_classes
 
-        # 构建衍射层
-        self.layers = nn.ModuleList([
-            DiffractiveLayer(size, wavelength, layer_distance, pixel_size)
-            for _ in range(num_layers)
-        ])
-
-        # 最后一层到输出平面的传播 (无调制)
+        self.layers = nn.ModuleList(
+            [DiffractiveLayer(size, wavelength, layer_distance, pixel_size) for _ in range(num_layers)]
+        )
         self.register_buffer(
             "H_out",
             self._build_output_transfer(size, wavelength, layer_distance, pixel_size),
         )
-
-        # 检测器区域：将输出平面划分为 num_classes 个区域
         self.register_buffer("detector_masks", self._build_detectors(size, num_classes, detector_size))
 
     @staticmethod
     def _build_output_transfer(size, wavelength, layer_distance, pixel_size):
-        k = 2 * np.pi / wavelength
         fx = torch.fft.fftfreq(size, d=pixel_size)
         fy = torch.fft.fftfreq(size, d=pixel_size)
         FX, FY = torch.meshgrid(fx, fy, indexing="ij")
         sq = (1.0 / wavelength) ** 2 - FX**2 - FY**2
         propagating = sq > 0
         kz = torch.sqrt(torch.clamp(sq, min=0))
-        H = torch.exp(1j * 2 * np.pi * kz * layer_distance) * propagating
-        return H
+        return torch.exp(1j * 2 * np.pi * kz * layer_distance) * propagating
 
     @staticmethod
     def _build_detectors(size, num_classes, detector_size=None):
-        """
-        在输出平面上创建环形排列的检测器区域。
-
-        论文中 10 个检测器排列在输出平面上（类似钟表刻度）。
-        每个检测器是一个方形区域，收集该区域的总光强。
-        """
         if detector_size is None:
             detector_size = max(size // 15, 3)
 
         masks = torch.zeros(num_classes, size, size)
         center = size // 2
-        radius = size // 4  # 检测器到中心的距离
+        radius = size // 4
 
         for i in range(num_classes):
-            angle = 2 * np.pi * i / num_classes - np.pi / 2  # 从12点钟方向开始
+            angle = 2 * np.pi * i / num_classes - np.pi / 2
             cx = int(center + radius * np.cos(angle))
             cy = int(center + radius * np.sin(angle))
             half = detector_size // 2
@@ -188,51 +148,41 @@ class D2NN(nn.Module):
         return masks
 
     def forward(self, x):
-        """
-        Args:
-            x: 输入图像 (batch, 1, H, W)，值域 [0, 1]
-        Returns:
-            class_intensities: 各检测器区域的总光强 (batch, num_classes)
-        """
-        batch = x.shape[0]
+        return self.detect_from_intensity(self.output_intensity(x))
 
-        # 将输入图像嵌入到网络输入平面中央（振幅编码）
-        u = self._embed_input(x)
+    def propagate_embedded_field(self, u):
+        return propagate_output_field(u, self.layers, self.H_out)
 
-        # 逐层衍射传播
-        for layer in self.layers:
-            u = layer(u)
+    def propagate_field(self, x):
+        return self.propagate_embedded_field(self._embed_input(x))
 
-        # 最后传播到输出平面
-        U = torch.fft.fft2(u)
-        U = U * self.H_out.unsqueeze(0)
-        u = torch.fft.ifft2(U)
+    @staticmethod
+    def output_intensity_from_field(field):
+        return torch.abs(field) ** 2
 
-        # 计算输出平面的光强
-        intensity = torch.abs(u) ** 2  # (batch, size, size)
+    def output_intensity(self, x):
+        return self.output_intensity_from_field(self.propagate_field(x))
 
-        # 各检测器区域收集光强
-        class_intensities = torch.zeros(batch, self.num_classes, device=x.device)
+    def detect_from_intensity(self, intensity):
+        batch = intensity.shape[0]
+        class_intensities = torch.zeros(batch, self.num_classes, device=intensity.device)
         for i in range(self.num_classes):
-            mask = self.detector_masks[i]  # (size, size)
+            mask = self.detector_masks[i]
             class_intensities[:, i] = (intensity * mask.unsqueeze(0)).sum(dim=(-2, -1))
-
         return class_intensities
 
     def _embed_input(self, x):
-        """将输入图像 (batch, 1, 28, 28) 嵌入到 (batch, size, size) 的复数光场中。"""
         batch = x.shape[0]
         u = torch.zeros(batch, self.size, self.size, dtype=torch.cfloat, device=x.device)
 
-        # 将 28x28 放缩到合适大小，嵌入中央
-        img = x.squeeze(1)  # (batch, 28, 28)
-        target_size = self.size // 3  # 输入占网络面积的约 1/3
-        img_resized = F.interpolate(
-            img.unsqueeze(1), size=(target_size, target_size), mode="bilinear", align_corners=False
+        image = x.squeeze(1)
+        target_size = self.size // 3
+        image_resized = F.interpolate(
+            image.unsqueeze(1), size=(target_size, target_size), mode="bilinear", align_corners=False
         ).squeeze(1)
 
         offset = (self.size - target_size) // 2
-        u[:, offset : offset + target_size, offset : offset + target_size] = img_resized.to(torch.cfloat)
+        u[:, offset : offset + target_size, offset : offset + target_size] = image_resized.to(torch.cfloat)
         return u
 
     def export_phase_masks(self, wrap=True):
@@ -264,19 +214,25 @@ class D2NNImager(nn.Module):
         )
 
     def forward(self, x):
-        intensity = self.propagate(x)
+        intensity = self.output_intensity(x)
         max_vals = intensity.amax(dim=(-2, -1), keepdim=True).clamp_min(1e-8)
         return intensity / max_vals
 
-    def propagate(self, x):
-        u = self._embed_input(x)
-        for layer in self.layers:
-            u = layer(u)
+    def propagate_embedded_field(self, u):
+        return propagate_output_field(u, self.layers, self.H_out)
 
-        U = torch.fft.fft2(u)
-        U = U * self.H_out.unsqueeze(0)
-        u = torch.fft.ifft2(U)
-        return torch.abs(u) ** 2
+    def propagate_field(self, x):
+        return self.propagate_embedded_field(self._embed_input(x))
+
+    @staticmethod
+    def output_intensity_from_field(field):
+        return torch.abs(field) ** 2
+
+    def output_intensity(self, x):
+        return self.output_intensity_from_field(self.propagate_field(x))
+
+    def propagate(self, x):
+        return self.output_intensity(x)
 
     def _embed_input(self, x):
         target_size = max(int(self.size * self.input_fraction), 1)

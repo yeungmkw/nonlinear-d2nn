@@ -194,11 +194,7 @@ def plot_output_energy(model, test_loader, device, class_names, save_path=None, 
 
     for data, target in test_loader:
         data, target = data.to(device), target.to(device)
-        u = model._embed_input(data)
-        for layer in model.layers:
-            u = layer(u)
-        u = torch.fft.ifft2(torch.fft.fft2(u) * model.H_out.unsqueeze(0))
-        intensity = (torch.abs(u) ** 2).cpu()
+        intensity = model.output_intensity(data).cpu()
         target_cpu = target.cpu()
 
         for i in range(num_classes):

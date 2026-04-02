@@ -84,6 +84,16 @@ class D2NNCoreTests(unittest.TestCase):
         self.assertTrue(torch.all(phase_masks >= 0))
         self.assertTrue(torch.all(phase_masks < 2 * math.pi + 1e-6))
 
+    def test_classifier_propagation_helpers_match_forward(self):
+        model = D2NN(**CLASSIFIER_PAPER_OPTICS.with_overrides(size=24, num_layers=2).classifier_model_kwargs())
+        x = torch.rand(2, 1, 28, 28)
+        field = model.propagate_field(x)
+        intensity = model.output_intensity_from_field(field)
+        detected = model.detect_from_intensity(intensity)
+        self.assertEqual(field.shape, (2, 24, 24))
+        self.assertEqual(intensity.shape, (2, 24, 24))
+        self.assertTrue(torch.allclose(detected, model(x), atol=1e-5, rtol=1e-4))
+
     def test_imager_target_is_normalized(self):
         model = D2NNImager(**IMAGER_PAPER_OPTICS.with_overrides(size=20, num_layers=2).imager_model_kwargs())
         x = torch.rand(2, 1, 8, 8)
@@ -91,6 +101,16 @@ class D2NNCoreTests(unittest.TestCase):
         self.assertEqual(target.shape, (2, 20, 20))
         self.assertTrue(torch.all(target >= 0))
         self.assertTrue(torch.allclose(target.amax(dim=(-2, -1)), torch.ones(2), atol=1e-5))
+
+    def test_imager_propagation_helpers_match_forward(self):
+        model = D2NNImager(**IMAGER_PAPER_OPTICS.with_overrides(size=20, num_layers=2).imager_model_kwargs())
+        x = torch.rand(2, 1, 8, 8)
+        field = model.propagate_field(x)
+        intensity = model.output_intensity_from_field(field)
+        expected = intensity / intensity.amax(dim=(-2, -1), keepdim=True).clamp_min(1e-8)
+        self.assertEqual(field.shape, (2, 20, 20))
+        self.assertEqual(intensity.shape, (2, 20, 20))
+        self.assertTrue(torch.allclose(expected, model(x), atol=1e-5, rtol=1e-4))
 
     def test_phase_to_height_map_requires_positive_delta_n(self):
         phases = torch.ones(2, 4, 4)
