@@ -147,6 +147,25 @@ def checkpoint_variant_path(checkpoint_path, run_name=None):
     return checkpoint_path.with_name(f"{checkpoint_path.stem}.{safe_name}{checkpoint_path.suffix}")
 
 
+def experiment_manifest_fields(
+    *,
+    checkpoint_path,
+    run_name=None,
+    experiment_stage=None,
+    seed=None,
+    optics: OpticalConfig | None = None,
+):
+    payload = {
+        "checkpoint": str(Path(checkpoint_path)),
+        "run_name": run_name,
+        "experiment_stage": experiment_stage,
+        "seed": seed,
+    }
+    if optics is not None:
+        payload["optical_config"] = optical_config_dict(optics)
+    return payload
+
+
 def read_manifest(path):
     return json.loads(Path(path).read_text(encoding="utf-8"))
 

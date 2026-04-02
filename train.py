@@ -4,10 +4,20 @@ D2NN unified training entrypoint.
 
 import argparse
 from pathlib import Path
+import random
 
+import numpy as np
 import torch
 
 from tasks import run_classification_training, run_imaging_training
+
+
+def seed_everything(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
 def build_parser():
@@ -34,6 +44,13 @@ def build_parser():
         default=None,
         help="optional experiment suffix used to keep checkpoints/manifests separate",
     )
+    parser.add_argument(
+        "--experiment-stage",
+        type=str,
+        default="baseline",
+        help="high-level experiment stage label recorded in manifests",
+    )
+    parser.add_argument("--seed", type=int, default=42, help="random seed for splits, loaders, and training")
     parser.add_argument("--wavelength", type=float, default=None)
     parser.add_argument("--layer-distance", type=float, default=None)
     parser.add_argument("--pixel-size", type=float, default=None)
@@ -47,6 +64,8 @@ def main(argv=None):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
+    seed_everything(args.seed)
+    print(f"Seed: {args.seed}")
 
     repo_root = Path(__file__).parent
     data_dir = repo_root / "data"

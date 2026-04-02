@@ -14,6 +14,7 @@ from artifacts import (
     apply_manufacturing_profile,
     checkpoint_manifest_path,
     checkpoint_variant_path,
+    experiment_manifest_fields,
     export_height_map_to_ascii_stl,
     infer_architecture,
     read_manifest,
@@ -23,6 +24,9 @@ from artifacts import (
     build_layer_stats,
 )
 from d2nn import D2NN, D2NNImager, phase_to_height_map
+from train import build_parser
+from tasks import resolve_experiment_seed
+from visualize import build_parser as build_visualize_parser
 
 
 class D2NNCoreTests(unittest.TestCase):
@@ -153,6 +157,34 @@ class D2NNCoreTests(unittest.TestCase):
     def test_checkpoint_variant_path_ignores_blank_run_name_after_sanitizing(self):
         path = checkpoint_variant_path("checkpoints/best_mnist.pth", "   ")
         self.assertEqual(Path("checkpoints/best_mnist.pth"), path)
+
+    def test_experiment_manifest_fields_include_identity_metadata(self):
+        payload = experiment_manifest_fields(
+            checkpoint_path=Path("checkpoints/best_fashion_mnist.pth"),
+            run_name="baseline_5layer",
+            experiment_stage="baseline",
+            seed=42,
+            optics=CLASSIFIER_PAPER_OPTICS.with_overrides(size=200, num_layers=5),
+        )
+        self.assertEqual(payload["checkpoint"], str(Path("checkpoints/best_fashion_mnist.pth")))
+        self.assertEqual(payload["run_name"], "baseline_5layer")
+        self.assertEqual(payload["experiment_stage"], "baseline")
+        self.assertEqual(payload["seed"], 42)
+        self.assertEqual(payload["optical_config"]["num_layers"], 5)
+
+    def test_train_parser_accepts_seed_and_experiment_stage(self):
+        args = build_parser().parse_args(["--seed", "7", "--experiment-stage", "placement_ablation"])
+        self.assertEqual(args.seed, 7)
+        self.assertEqual(args.experiment_stage, "placement_ablation")
+
+    def test_visualize_parser_accepts_seed(self):
+        args = build_visualize_parser().parse_args(["--checkpoint", "checkpoints/demo.pth", "--seed", "11"])
+        self.assertEqual(args.seed, 11)
+
+    def test_resolve_experiment_seed_prefers_explicit_seed_then_manifest_then_default(self):
+        self.assertEqual(resolve_experiment_seed(11, {"seed": 7}), 11)
+        self.assertEqual(resolve_experiment_seed(None, {"seed": 7}), 7)
+        self.assertEqual(resolve_experiment_seed(None, None), 42)
 
     def test_resolve_optics_uses_checkpoint_architecture_when_missing(self):
         state_dict = {

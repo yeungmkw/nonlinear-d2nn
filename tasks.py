@@ -20,10 +20,11 @@ from artifacts import (
     build_model_for_task,
     checkpoint_manifest_path,
     checkpoint_variant_path,
+    experiment_manifest_fields,
     load_checkpoint_state_dict,
     maybe_show,
-    optical_config_dict,
     plot_phase_masks,
+    read_checkpoint_manifest,
     resolve_optics,
     save_manifest,
 )
@@ -59,6 +60,14 @@ def d2nn_mse_loss(output, target, num_classes=10):
     output_norm = output / (output.sum(dim=1, keepdim=True) + 1e-8)
     target_onehot = F.one_hot(target, num_classes).float()
     return F.mse_loss(output_norm, target_onehot)
+
+
+def resolve_experiment_seed(explicit_seed, manifest=None, default=42):
+    if explicit_seed is not None:
+        return explicit_seed
+    if manifest and manifest.get("seed") is not None:
+        return manifest["seed"]
+    return default
 
 
 def train_classification_one_epoch(model, loader, optimizer, device, num_classes=10):
@@ -116,10 +125,16 @@ def run_classification_training(args, device, data_dir, save_dir):
     train_set, val_set = torch.utils.data.random_split(
         train_set,
         [55000, 5000],
-        generator=torch.Generator().manual_seed(42),
+        generator=torch.Generator().manual_seed(args.seed),
     )
 
-    train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, num_workers=0)
+    train_loader = DataLoader(
+        train_set,
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=0,
+        generator=torch.Generator().manual_seed(args.seed),
+    )
     val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=False, num_workers=0)
     test_loader = DataLoader(test_set, batch_size=args.batch_size, shuffle=False, num_workers=0)
 
@@ -166,8 +181,6 @@ def run_classification_training(args, device, data_dir, save_dir):
         {
             "task": "classification",
             "dataset": dataset_cfg["display_name"],
-            "checkpoint": str(checkpoint_path),
-            "run_name": args.run_name,
             "paper_target_accuracy": dataset_cfg["paper_target"],
             "epochs": args.epochs,
             "batch_size": args.batch_size,
@@ -175,7 +188,13 @@ def run_classification_training(args, device, data_dir, save_dir):
             "best_val_accuracy": best_val_acc,
             "test_accuracy": test_acc,
             "test_loss": test_loss,
-            "optical_config": optical_config_dict(optics),
+            **experiment_manifest_fields(
+                checkpoint_path=checkpoint_path,
+                run_name=args.run_name,
+                experiment_stage=args.experiment_stage,
+                seed=args.seed,
+                optics=optics,
+            ),
         },
     )
     print(
@@ -311,7 +330,7 @@ def run_classification_visualization(args):
     )
 
 
-def build_imaging_dataset(dataset_name, data_dir, image_root, transform):
+def build_imaging_dataset(dataset_name, data_dir, image_root, transform, seed):
     dataset_key = dataset_name.lower().replace("-", "_")
 
     if dataset_key == "stl10":
@@ -322,7 +341,7 @@ def build_imaging_dataset(dataset_name, data_dir, image_root, transform):
         train_set, val_set = random_split(
             train_full,
             [train_len, val_len],
-            generator=torch.Generator().manual_seed(42),
+            generator=torch.Generator().manual_seed(seed),
         )
         return {
             "display_name": "STL10",
@@ -343,7 +362,7 @@ def build_imaging_dataset(dataset_name, data_dir, image_root, transform):
         train_set, val_set, test_set = random_split(
             full_set,
             [train_len, val_len, test_len],
-            generator=torch.Generator().manual_seed(42),
+            generator=torch.Generator().manual_seed(seed),
         )
         return {
             "display_name": f"ImageFolder({image_root})",
@@ -416,10 +435,16 @@ def run_imaging_training(args, device, data_dir, save_dir):
             transforms.ToTensor(),
         ]
     )
-    dataset_cfg = build_imaging_dataset(args.dataset, data_dir, args.image_root, transform)
+    dataset_cfg = build_imaging_dataset(args.dataset, data_dir, args.image_root, transform, args.seed)
     print(f"Dataset: {dataset_cfg['display_name']}")
 
-    train_loader = DataLoader(dataset_cfg["train_set"], batch_size=args.batch_size, shuffle=True, num_workers=0)
+    train_loader = DataLoader(
+        dataset_cfg["train_set"],
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=0,
+        generator=torch.Generator().manual_seed(args.seed),
+    )
     val_loader = DataLoader(dataset_cfg["val_set"], batch_size=args.batch_size, shuffle=False, num_workers=0)
     test_loader = DataLoader(dataset_cfg["test_set"], batch_size=args.batch_size, shuffle=False, num_workers=0)
 
@@ -460,8 +485,6 @@ def run_imaging_training(args, device, data_dir, save_dir):
         {
             "task": "imaging",
             "dataset": dataset_cfg["display_name"],
-            "checkpoint": str(checkpoint_path),
-            "run_name": args.run_name,
             "epochs": args.epochs,
             "batch_size": args.batch_size,
             "learning_rate": args.lr,
@@ -469,7 +492,13 @@ def run_imaging_training(args, device, data_dir, save_dir):
             "input_fraction": args.input_fraction,
             "best_val_loss": best_val_loss,
             "test_mse": test_loss,
-            "optical_config": optical_config_dict(optics),
+            **experiment_manifest_fields(
+                checkpoint_path=checkpoint_path,
+                run_name=args.run_name,
+                experiment_stage=args.experiment_stage,
+                seed=args.seed,
+                optics=optics,
+            ),
         },
     )
     print(f"\nTest MSE: {test_loss:.4f} (saved to {checkpoint_path.name})")
@@ -508,7 +537,7 @@ def plot_reconstructions(model, loader, num_samples, save_path=None, no_show=Fal
     plt.close(fig)
 
 
-def build_imaging_visualization_dataset(dataset_name, data_dir, image_root, transform):
+def build_imaging_visualization_dataset(dataset_name, data_dir, image_root, transform, seed):
     dataset_key = dataset_name.lower().replace("-", "_")
     if dataset_key == "stl10":
         return datasets.STL10(data_dir, split="test", download=True, transform=transform), "STL10"
@@ -523,7 +552,7 @@ def build_imaging_visualization_dataset(dataset_name, data_dir, image_root, tran
         _, _, test_set = random_split(
             full_set,
             [train_len, val_len, test_len],
-            generator=torch.Generator().manual_seed(42),
+            generator=torch.Generator().manual_seed(seed),
         )
         return test_set, f"ImageFolder({image_root})"
     raise ValueError("Unsupported imaging dataset. Use stl10 or imagefolder.")
@@ -538,7 +567,15 @@ def run_imaging_visualization(args):
         ]
     )
     data_dir = args.repo_root / "data"
-    test_set, dataset_name = build_imaging_visualization_dataset(args.dataset, data_dir, args.image_root, transform)
+    manifest = read_checkpoint_manifest(args.checkpoint)
+    split_seed = resolve_experiment_seed(args.seed, manifest)
+    test_set, dataset_name = build_imaging_visualization_dataset(
+        args.dataset,
+        data_dir,
+        args.image_root,
+        transform,
+        split_seed,
+    )
     loader = DataLoader(test_set, batch_size=args.num_samples, shuffle=False, num_workers=0)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

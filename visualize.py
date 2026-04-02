@@ -24,6 +24,7 @@ def build_parser():
     parser.add_argument("--image-size", type=int, default=64)
     parser.add_argument("--num-samples", type=int, default=6)
     parser.add_argument("--input-fraction", type=float, default=0.5)
+    parser.add_argument("--seed", type=int, default=None, help="dataset split seed for imagefolder visualization")
     parser.add_argument("--output-dir", type=str, default=None)
     parser.add_argument("--no-show", action="store_true", help="Save figures without opening windows")
     parser.add_argument("--wavelength", type=float, default=None)
