@@ -47,6 +47,8 @@ def build_parser():
             "coherent_amplitude_presets",
             "coherent_phase_presets",
             "coherent_activation_mechanisms",
+            "incoherent_intensity_presets",
+            "activation_mechanisms",
         ],
         help="print a predefined experiment command grid and exit",
     )
@@ -67,7 +69,7 @@ def build_parser():
         "--activation-type",
         type=str,
         default="none",
-        choices=["none", "identity", "coherent_amplitude", "coherent_phase"],
+        choices=["none", "identity", "coherent_amplitude", "coherent_phase", "incoherent_intensity"],
         help="optional field activation inserted after selected diffractive layers",
     )
     parser.add_argument(

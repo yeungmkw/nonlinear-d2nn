@@ -131,6 +131,34 @@ class CoherentPhaseActivation(FieldActivationBase):
         return u * torch.exp(1j * phase_shift)
 
 
+class IncoherentIntensityActivation(FieldActivationBase):
+    """Intensity-only activation that discards input phase and emits a new field."""
+
+    def __init__(self, responsivity=1.0, threshold=0.1, emission_phase_mode="zero"):
+        super().__init__()
+        if responsivity <= 0:
+            raise ValueError("responsivity must be positive")
+        if emission_phase_mode != "zero":
+            raise ValueError("Only emission_phase_mode='zero' is currently supported")
+
+        self.responsivity = float(responsivity)
+        self.threshold = float(threshold)
+        self.emission_phase_mode = emission_phase_mode
+
+    def forward(self, u):
+        intensity = safe_abs(u) ** 2
+        emitted_amplitude = torch.relu(self.responsivity * intensity - self.threshold)
+        emitted_phase = torch.zeros_like(emitted_amplitude)
+        self.last_stats = {
+            "mean_intensity": float(intensity.mean().detach().cpu()),
+            "mean_output_amplitude": float(emitted_amplitude.mean().detach().cpu()),
+            "max_output_amplitude": float(emitted_amplitude.max().detach().cpu()),
+            "min_output_amplitude": float(emitted_amplitude.min().detach().cpu()),
+            "emission_phase_mode": self.emission_phase_mode,
+        }
+        return emitted_amplitude.to(torch.cfloat) * torch.exp(1j * emitted_phase)
+
+
 def normalize_activation_positions(positions, num_layers):
     """Normalize 1-based layer indices used for inter-layer activation placement."""
     if positions in (None, "", ()):
@@ -161,6 +189,8 @@ def build_activation_module(activation_type, activation_hparams=None):
         return CoherentAmplitudeActivation(**activation_hparams)
     if activation_type == "coherent_phase":
         return CoherentPhaseActivation(**activation_hparams)
+    if activation_type == "incoherent_intensity":
+        return IncoherentIntensityActivation(**activation_hparams)
     raise ValueError(f"Unsupported activation type: {activation_type}")
 
 

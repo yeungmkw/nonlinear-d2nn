@@ -63,6 +63,13 @@ COHERENT_PHASE_PRESETS = {
 }
 
 
+INCOHERENT_INTENSITY_PRESETS = {
+    "conservative": {"responsivity": 0.5, "threshold": 0.15, "emission_phase_mode": "zero"},
+    "balanced": {"responsivity": 1.0, "threshold": 0.1, "emission_phase_mode": "zero"},
+    "aggressive": {"responsivity": 1.5, "threshold": 0.05, "emission_phase_mode": "zero"},
+}
+
+
 def parse_activation_positions(value):
     if value in (None, "", ()):
         return ()
@@ -115,6 +122,8 @@ def activation_preset_hparams(args=None):
         return dict(COHERENT_AMPLITUDE_PRESETS[activation_preset])
     if activation_type == "coherent_phase":
         return dict(COHERENT_PHASE_PRESETS[activation_preset])
+    if activation_type == "incoherent_intensity":
+        return dict(INCOHERENT_INTENSITY_PRESETS[activation_preset])
     return {}
 
 
@@ -182,6 +191,8 @@ def format_activation_diagnostics(diagnostics):
             summary.append(f"gain={stats['mean_gain']:.3f}")
         if "mean_phase_shift" in stats:
             summary.append(f"dphi={stats['mean_phase_shift']:.3f}")
+        if "mean_output_amplitude" in stats:
+            summary.append(f"A={stats['mean_output_amplitude']:.3f}")
         if "mean_intensity" in stats:
             summary.append(f"I={stats['mean_intensity']:.3f}")
         if summary:
@@ -247,6 +258,30 @@ def build_experiment_grid(grid_name, args):
                 "activation_placement": "mid",
             }
             for activation_type in ("coherent_amplitude", "coherent_phase")
+        ]
+
+    if grid_name == "incoherent_intensity_presets":
+        return [
+            {
+                **base,
+                "experiment_stage": "mechanism_tuning",
+                "activation_type": "incoherent_intensity",
+                "activation_preset": preset,
+                "activation_placement": "mid",
+            }
+            for preset in ("conservative", "balanced", "aggressive")
+        ]
+
+    if grid_name == "activation_mechanisms":
+        return [
+            {
+                **base,
+                "experiment_stage": "mechanism_ablation",
+                "activation_type": activation_type,
+                "activation_preset": "balanced",
+                "activation_placement": "mid",
+            }
+            for activation_type in ("coherent_amplitude", "coherent_phase", "incoherent_intensity")
         ]
 
     raise ValueError(f"Unsupported experiment grid: {grid_name}")

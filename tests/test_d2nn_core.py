@@ -30,6 +30,7 @@ from d2nn import (
     D2NN,
     D2NNImager,
     IdentityActivation,
+    IncoherentIntensityActivation,
     phase_to_height_map,
     safe_abs,
 )
@@ -199,6 +200,25 @@ class D2NNCoreTests(unittest.TestCase):
         self.assertIn("mean_phase_shift", activation.last_stats)
         self.assertGreater(activation.last_stats["mean_phase_shift"], 0.0)
 
+    def test_incoherent_intensity_activation_discards_input_phase_for_equal_intensity(self):
+        activation = IncoherentIntensityActivation(responsivity=1.0, threshold=0.1, emission_phase_mode="zero")
+        u = torch.tensor([[[1.0 + 0j, 1.0j]]], dtype=torch.cfloat)
+
+        out = activation(u)
+
+        self.assertTrue(torch.allclose(safe_abs(out[..., 0]), safe_abs(out[..., 1]), atol=1e-6, rtol=1e-6))
+        self.assertTrue(torch.allclose(torch.angle(out), torch.zeros_like(out.real), atol=1e-6, rtol=1e-6))
+
+    def test_incoherent_intensity_activation_records_output_amplitude_stats(self):
+        activation = IncoherentIntensityActivation(responsivity=0.5, threshold=0.1, emission_phase_mode="zero")
+        u = torch.full((1, 2, 2), 2.0 + 0j, dtype=torch.cfloat)
+        _ = activation(u)
+
+        self.assertIn("mean_intensity", activation.last_stats)
+        self.assertIn("mean_output_amplitude", activation.last_stats)
+        self.assertGreater(activation.last_stats["mean_output_amplitude"], 0.0)
+        self.assertEqual(activation.last_stats["emission_phase_mode"], "zero")
+
     def test_classifier_identity_activation_matches_baseline_forward(self):
         optics = CLASSIFIER_PAPER_OPTICS.with_overrides(size=24, num_layers=3)
         baseline = D2NN(**optics.classifier_model_kwargs())
@@ -257,6 +277,20 @@ class D2NNCoreTests(unittest.TestCase):
             activation_type="coherent_phase",
             activation_positions=(1,),
             activation_hparams={"gamma": 0.25},
+        )
+        x = torch.rand(4, 1, 28, 28)
+        target = torch.tensor([0, 1, 2, 3])
+        loss = d2nn_mse_loss(model(x), target, num_classes=10)
+        loss.backward()
+        self.assertTrue(all(layer.phase.grad is not None for layer in model.layers))
+
+    def test_classifier_incoherent_intensity_activation_supports_backward_pass(self):
+        optics = CLASSIFIER_PAPER_OPTICS.with_overrides(size=24, num_layers=2)
+        model = D2NN(
+            **optics.classifier_model_kwargs(),
+            activation_type="incoherent_intensity",
+            activation_positions=(1,),
+            activation_hparams={"responsivity": 1.0, "threshold": 0.1, "emission_phase_mode": "zero"},
         )
         x = torch.rand(4, 1, 28, 28)
         target = torch.tensor([0, 1, 2, 3])
@@ -407,23 +441,26 @@ class D2NNCoreTests(unittest.TestCase):
                 "--print-experiment-grid",
                 "coherent_amplitude_positions",
                 "--activation-type",
-                "coherent_phase",
+                "incoherent_intensity",
                 "--activation-preset",
                 "balanced",
                 "--activation-placement",
                 "mid",
                 "--activation-positions",
                 "1,3",
-                "--activation-gamma",
-                "0.25",
+                "--activation-responsivity",
+                "1.2",
+                "--activation-emission-phase-mode",
+                "zero",
             ]
         )
         self.assertEqual(args.print_experiment_grid, "coherent_amplitude_positions")
-        self.assertEqual(args.activation_type, "coherent_phase")
+        self.assertEqual(args.activation_type, "incoherent_intensity")
         self.assertEqual(args.activation_preset, "balanced")
         self.assertEqual(args.activation_placement, "mid")
         self.assertEqual(args.activation_positions, "1,3")
-        self.assertAlmostEqual(args.activation_gamma, 0.25)
+        self.assertAlmostEqual(args.activation_responsivity, 1.2)
+        self.assertEqual(args.activation_emission_phase_mode, "zero")
 
     def test_visualize_parser_accepts_seed(self):
         args = build_visualize_parser().parse_args(["--checkpoint", "checkpoints/demo.pth", "--seed", "11"])
@@ -536,6 +573,42 @@ class D2NNCoreTests(unittest.TestCase):
         _, _, hparams = resolve_activation_config(args, None)
         self.assertEqual(hparams, {"gamma": 0.4})
 
+    def test_resolve_activation_config_applies_incoherent_intensity_preset_defaults(self):
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "--activation-type",
+                "incoherent_intensity",
+                "--activation-preset",
+                "balanced",
+                "--activation-positions",
+                "2",
+            ]
+        )
+        activation_type, positions, hparams = resolve_activation_config(args, None)
+        self.assertEqual(activation_type, "incoherent_intensity")
+        self.assertEqual(positions, (2,))
+        self.assertEqual(hparams, {"responsivity": 1.0, "threshold": 0.1, "emission_phase_mode": "zero"})
+
+    def test_resolve_activation_config_lets_explicit_incoherent_args_override_preset(self):
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "--activation-type",
+                "incoherent_intensity",
+                "--activation-preset",
+                "balanced",
+                "--activation-threshold",
+                "0.2",
+                "--activation-responsivity",
+                "1.4",
+            ]
+        )
+        _, _, hparams = resolve_activation_config(args, None)
+        self.assertEqual(hparams["threshold"], 0.2)
+        self.assertEqual(hparams["responsivity"], 1.4)
+        self.assertEqual(hparams["emission_phase_mode"], "zero")
+
     def test_resolve_activation_config_maps_mid_placement_alias(self):
         parser = build_parser()
         args = parser.parse_args(
@@ -629,6 +702,47 @@ class D2NNCoreTests(unittest.TestCase):
         self.assertTrue(all(item["activation_placement"] == "mid" for item in grid))
         self.assertTrue(all(item["experiment_stage"] == "mechanism_ablation" for item in grid))
 
+    def test_build_experiment_grid_returns_incoherent_preset_sweep(self):
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "--task",
+                "classification",
+                "--dataset",
+                "fashion-mnist",
+                "--layers",
+                "5",
+            ]
+        )
+        grid = build_experiment_grid("incoherent_intensity_presets", args)
+        self.assertEqual(len(grid), 3)
+        self.assertTrue(all(item["activation_type"] == "incoherent_intensity" for item in grid))
+        self.assertEqual([item["activation_preset"] for item in grid], ["conservative", "balanced", "aggressive"])
+        self.assertTrue(all(item["activation_placement"] == "mid" for item in grid))
+        self.assertTrue(all(item["experiment_stage"] == "mechanism_tuning" for item in grid))
+
+    def test_build_experiment_grid_returns_all_activation_mechanisms(self):
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "--task",
+                "classification",
+                "--dataset",
+                "fashion-mnist",
+                "--layers",
+                "5",
+            ]
+        )
+        grid = build_experiment_grid("activation_mechanisms", args)
+        self.assertEqual(len(grid), 3)
+        self.assertEqual(
+            [item["activation_type"] for item in grid],
+            ["coherent_amplitude", "coherent_phase", "incoherent_intensity"],
+        )
+        self.assertTrue(all(item["activation_preset"] == "balanced" for item in grid))
+        self.assertTrue(all(item["activation_placement"] == "mid" for item in grid))
+        self.assertTrue(all(item["experiment_stage"] == "mechanism_ablation" for item in grid))
+
     def test_format_experiment_grid_commands_renders_train_commands(self):
         parser = build_parser()
         args = parser.parse_args(
@@ -666,6 +780,24 @@ class D2NNCoreTests(unittest.TestCase):
         self.assertIn("--experiment-stage mechanism_ablation", mechanism_commands[0])
         self.assertIn("--activation-type coherent_amplitude", mechanism_commands[0])
         self.assertIn("--activation-type coherent_phase", mechanism_commands[1])
+
+    def test_format_experiment_grid_commands_renders_incoherent_variants(self):
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "--task",
+                "classification",
+                "--dataset",
+                "fashion-mnist",
+                "--layers",
+                "5",
+            ]
+        )
+        preset_commands = format_experiment_grid_commands("incoherent_intensity_presets", args)
+        mechanism_commands = format_experiment_grid_commands("activation_mechanisms", args)
+        self.assertIn("--activation-type incoherent_intensity", preset_commands[0])
+        self.assertIn("--activation-preset conservative", preset_commands[0])
+        self.assertIn("--activation-type incoherent_intensity", mechanism_commands[2])
 
     def test_resolve_optics_uses_checkpoint_architecture_when_missing(self):
         state_dict = {
