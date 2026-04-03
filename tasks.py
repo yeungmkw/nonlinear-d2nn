@@ -57,6 +57,14 @@ CLASSIFICATION_DATASETS = {
         "default_output_dir": "figures/cifar10_gray",
         "grayscale": True,
     },
+    "cifar10_rgb": {
+        "dataset_cls": datasets.CIFAR10,
+        "display_name": "CIFAR-10 (RGB)",
+        "checkpoint_name": "best_cifar10_rgb.pth",
+        "paper_target": None,
+        "default_output_dir": "figures/cifar10_rgb",
+        "grayscale": False,
+    },
 }
 
 

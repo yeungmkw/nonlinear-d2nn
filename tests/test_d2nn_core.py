@@ -102,11 +102,23 @@ class D2NNCoreTests(unittest.TestCase):
         self.assertEqual(cfg["display_name"], "CIFAR-10 (grayscale)")
         self.assertEqual(cfg["checkpoint_name"], "best_cifar10_gray.pth")
 
+    def test_get_classification_dataset_config_supports_cifar10_rgb_alias(self):
+        cfg = get_classification_dataset_config("cifar10-rgb")
+        self.assertEqual(cfg["display_name"], "CIFAR-10 (RGB)")
+        self.assertEqual(cfg["checkpoint_name"], "best_cifar10_rgb.pth")
+
     def test_build_classification_transform_converts_cifar10_gray_to_single_channel(self):
         transform = build_classification_transform(get_classification_dataset_config("cifar10_gray"))
         image = Image.new("RGB", (32, 32), color=(255, 0, 0))
         tensor = transform(image)
         self.assertEqual(tensor.shape, (1, 32, 32))
+        self.assertEqual(tensor.dtype, torch.float32)
+
+    def test_build_classification_transform_preserves_cifar10_rgb_channels(self):
+        transform = build_classification_transform(get_classification_dataset_config("cifar10_rgb"))
+        image = Image.new("RGB", (32, 32), color=(255, 128, 0))
+        tensor = transform(image)
+        self.assertEqual(tensor.shape, (3, 32, 32))
         self.assertEqual(tensor.dtype, torch.float32)
 
     def test_classification_split_lengths_are_dataset_aware(self):
@@ -134,6 +146,32 @@ class D2NNCoreTests(unittest.TestCase):
         self.assertEqual(field.shape, (2, 24, 24))
         self.assertEqual(intensity.shape, (2, 24, 24))
         self.assertTrue(torch.allclose(detected, model(x), atol=1e-5, rtol=1e-4))
+
+    def test_classifier_rgb_embed_input_places_channels_into_disjoint_regions(self):
+        model = D2NN(**CLASSIFIER_PAPER_OPTICS.with_overrides(size=30, num_layers=2).classifier_model_kwargs())
+        x = torch.zeros(1, 3, 12, 12)
+        x[:, 0].fill_(1.0)
+        x[:, 1].fill_(2.0)
+        x[:, 2].fill_(3.0)
+
+        field = model._embed_input(x)
+
+        self.assertEqual(field.shape, (1, 30, 30))
+        self.assertEqual(field.dtype, torch.cfloat)
+
+        amplitude = field.abs()[0]
+        occupied_cols = torch.where(amplitude.sum(dim=0) > 0)[0]
+        self.assertGreaterEqual(occupied_cols.numel(), 3)
+
+        transitions = torch.where(torch.diff(occupied_cols) > 1)[0]
+        self.assertGreaterEqual(transitions.numel(), 2)
+
+    def test_classifier_accepts_rgb_batches(self):
+        model = D2NN(**CLASSIFIER_PAPER_OPTICS.with_overrides(size=24, num_layers=2).classifier_model_kwargs())
+        x = torch.rand(2, 3, 32, 32)
+        logits = model(x)
+        self.assertEqual(logits.shape, (2, 10))
+        self.assertEqual(logits.dtype, torch.float32)
 
     def test_imager_target_is_normalized(self):
         model = D2NNImager(**IMAGER_PAPER_OPTICS.with_overrides(size=20, num_layers=2).imager_model_kwargs())
@@ -490,6 +528,10 @@ class D2NNCoreTests(unittest.TestCase):
     def test_visualize_parser_accepts_seed(self):
         args = build_visualize_parser().parse_args(["--checkpoint", "checkpoints/demo.pth", "--seed", "11"])
         self.assertEqual(args.seed, 11)
+
+    def test_visualize_parser_help_mentions_cifar10_rgb(self):
+        help_text = build_visualize_parser().format_help()
+        self.assertIn("cifar10-rgb", help_text)
 
     def test_resolve_experiment_seed_prefers_explicit_seed_then_manifest_then_default(self):
         self.assertEqual(resolve_experiment_seed(11, {"seed": 7}), 11)

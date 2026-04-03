@@ -32,6 +32,34 @@ def embed_amplitude_image(x, size, target_size=None):
     return field
 
 
+def embed_rgb_amplitude_image(x, size, target_size=None):
+    """Embed an RGB image batch into three fixed horizontal amplitude subregions."""
+    batch, channels, _, _ = x.shape
+    if channels != 3:
+        raise ValueError("RGB embedding expects exactly 3 channels")
+
+    field = torch.zeros(batch, size, size, dtype=torch.cfloat, device=x.device)
+    target_size = target_size or size // 3
+    patch_size = max(target_size // 4, 1)
+
+    resized = F.interpolate(x, size=(patch_size, patch_size), mode="bilinear", align_corners=False)
+
+    total_width = 3 * patch_size
+    gap_count = 4
+    gap = max((target_size - total_width) // gap_count, 0)
+    window_offset = (size - target_size) // 2
+    offset_y = window_offset + max((target_size - patch_size) // 2, 0)
+    start_x = window_offset + gap
+
+    for channel_idx in range(3):
+        offset_x = start_x + channel_idx * (patch_size + gap)
+        field[:, offset_y : offset_y + patch_size, offset_x : offset_x + patch_size] = resized[:, channel_idx].to(
+            torch.cfloat
+        )
+
+    return field
+
+
 def collect_phase_masks(layers, wrap=True):
     """Collect phase masks from a stack of diffractive layers."""
     phase_masks = torch.stack([layer.phase.detach().cpu() for layer in layers], dim=0)
@@ -324,7 +352,12 @@ class D2NN(nn.Module):
         return class_intensities
 
     def _embed_input(self, x):
-        return embed_amplitude_image(x, self.size, target_size=self.size // 3)
+        channels = x.shape[1]
+        if channels == 1:
+            return embed_amplitude_image(x, self.size, target_size=self.size // 3)
+        if channels == 3:
+            return embed_rgb_amplitude_image(x, self.size, target_size=self.size // 3)
+        raise ValueError(f"Unsupported classification input channels: {channels}")
 
     def export_phase_masks(self, wrap=True):
         return collect_phase_masks(self.layers, wrap=wrap)
