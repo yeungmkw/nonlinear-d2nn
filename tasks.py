@@ -39,6 +39,7 @@ CLASSIFICATION_DATASETS = {
         "checkpoint_name": "best_mnist.pth",
         "paper_target": 91.75,
         "default_output_dir": "figures",
+        "grayscale": False,
     },
     "fashion_mnist": {
         "dataset_cls": datasets.FashionMNIST,
@@ -46,6 +47,15 @@ CLASSIFICATION_DATASETS = {
         "checkpoint_name": "best_fashion_mnist.pth",
         "paper_target": 81.13,
         "default_output_dir": "figures/fashion_mnist",
+        "grayscale": False,
+    },
+    "cifar10_gray": {
+        "dataset_cls": datasets.CIFAR10,
+        "display_name": "CIFAR-10 (grayscale)",
+        "checkpoint_name": "best_cifar10_gray.pth",
+        "paper_target": None,
+        "default_output_dir": "figures/cifar10_gray",
+        "grayscale": True,
     },
 }
 
@@ -161,6 +171,20 @@ def get_classification_dataset_config(dataset_name):
         valid = ", ".join(sorted(CLASSIFICATION_DATASETS))
         raise ValueError(f"Unsupported dataset '{dataset_name}'. Expected one of: {valid}")
     return CLASSIFICATION_DATASETS[dataset_key]
+
+
+def build_classification_transform(dataset_cfg):
+    transform_steps = []
+    if dataset_cfg.get("grayscale"):
+        transform_steps.append(transforms.Grayscale(num_output_channels=1))
+    transform_steps.append(transforms.ToTensor())
+    return transforms.Compose(transform_steps)
+
+
+def classification_split_lengths(total_train_size, val_size=5000):
+    if total_train_size <= val_size:
+        raise ValueError(f"Training set size {total_train_size} must exceed val_size {val_size}")
+    return total_train_size - val_size, val_size
 
 
 def d2nn_mse_loss(output, target, num_classes=10):
@@ -366,13 +390,14 @@ def run_classification_training(args, device, data_dir, save_dir):
     dataset_cfg = get_classification_dataset_config(args.dataset)
     print(f"Dataset: {dataset_cfg['display_name']}")
 
-    transform = transforms.Compose([transforms.ToTensor()])
+    transform = build_classification_transform(dataset_cfg)
     dataset_cls = dataset_cfg["dataset_cls"]
     train_set = dataset_cls(data_dir, train=True, download=True, transform=transform)
     test_set = dataset_cls(data_dir, train=False, download=True, transform=transform)
+    train_len, val_len = classification_split_lengths(len(train_set))
     train_set, val_set = torch.utils.data.random_split(
         train_set,
-        [55000, 5000],
+        [train_len, val_len],
         generator=torch.Generator().manual_seed(args.seed),
     )
 
@@ -470,10 +495,9 @@ def run_classification_training(args, device, data_dir, save_dir):
             "activation_diagnostics": last_activation_stats,
         },
     )
-    print(
-        f"\nTest accuracy: {test_acc:.2f}% "
-        f"(paper target: {dataset_cfg['paper_target']:.2f}%, saved to {checkpoint_path.name})"
-    )
+    paper_target = dataset_cfg["paper_target"]
+    paper_target_text = f"{paper_target:.2f}%" if paper_target is not None else "n/a"
+    print(f"\nTest accuracy: {test_acc:.2f}% (paper target: {paper_target_text}, saved to {checkpoint_path.name})")
 
 
 @torch.no_grad()
@@ -586,7 +610,7 @@ def run_classification_visualization(args):
     out_dir = args.repo_root / output_dir
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    transform = transforms.ToTensor()
+    transform = build_classification_transform(dataset_cfg)
     dataset_cls = dataset_cfg["dataset_cls"]
     test_set = dataset_cls(args.repo_root / "data", train=False, download=True, transform=transform)
     test_loader = DataLoader(test_set, batch_size=64, shuffle=False, num_workers=0)

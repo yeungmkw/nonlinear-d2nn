@@ -15,7 +15,7 @@ def build_parser():
         "--dataset",
         type=str,
         default="mnist",
-        help="classification: mnist/fashion-mnist; imaging: stl10/imagefolder",
+        help="classification: mnist/fashion-mnist/cifar10-gray; imaging: stl10/imagefolder",
     )
     parser.add_argument("--checkpoint", type=str, required=True)
     parser.add_argument("--image-root", type=str, default=None)

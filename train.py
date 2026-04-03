@@ -32,7 +32,7 @@ def build_parser():
         "--dataset",
         type=str,
         default="mnist",
-        help="classification: mnist/fashion-mnist; imaging: stl10/imagefolder",
+        help="classification: mnist/fashion-mnist/cifar10-gray; imaging: stl10/imagefolder",
     )
     parser.add_argument("--image-root", type=str, default=None, help="root for imagefolder mode")
     parser.add_argument("--epochs", type=int, default=20)

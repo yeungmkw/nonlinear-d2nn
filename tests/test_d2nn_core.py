@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import torch
+from PIL import Image
 
 from artifacts import (
     CLASSIFIER_PAPER_OPTICS,
@@ -36,10 +37,13 @@ from d2nn import (
 )
 from train import build_parser
 from tasks import (
+    build_classification_transform,
     build_experiment_grid,
+    classification_split_lengths,
     d2nn_mse_loss,
     execute_experiment_grid,
     format_experiment_grid_commands,
+    get_classification_dataset_config,
     resolve_activation_config,
     resolve_experiment_seed,
 )
@@ -92,6 +96,22 @@ class D2NNCoreTests(unittest.TestCase):
             "run_imaging_visualization",
         ):
             self.assertTrue(hasattr(tasks, name), f"tasks missing {name}")
+
+    def test_get_classification_dataset_config_supports_cifar10_gray_alias(self):
+        cfg = get_classification_dataset_config("cifar10-gray")
+        self.assertEqual(cfg["display_name"], "CIFAR-10 (grayscale)")
+        self.assertEqual(cfg["checkpoint_name"], "best_cifar10_gray.pth")
+
+    def test_build_classification_transform_converts_cifar10_gray_to_single_channel(self):
+        transform = build_classification_transform(get_classification_dataset_config("cifar10_gray"))
+        image = Image.new("RGB", (32, 32), color=(255, 0, 0))
+        tensor = transform(image)
+        self.assertEqual(tensor.shape, (1, 32, 32))
+        self.assertEqual(tensor.dtype, torch.float32)
+
+    def test_classification_split_lengths_are_dataset_aware(self):
+        self.assertEqual(classification_split_lengths(60000), (55000, 5000))
+        self.assertEqual(classification_split_lengths(50000), (45000, 5000))
 
     def test_classifier_detector_count_matches_classes(self):
         model = D2NN(**CLASSIFIER_PAPER_OPTICS.with_overrides(size=32, num_layers=2).classifier_model_kwargs())
