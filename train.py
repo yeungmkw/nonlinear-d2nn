@@ -109,7 +109,7 @@ def build_parser():
         type=str,
         default=None,
         choices=["conservative", "balanced", "aggressive"],
-        help="optional preset for coherent_amplitude activation hyperparameters",
+        help="optional preset for activation hyperparameters (applies to all activation types)",
     )
     parser.add_argument("--activation-threshold", type=float, default=None)
     parser.add_argument("--activation-temperature", type=float, default=None)

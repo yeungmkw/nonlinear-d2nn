@@ -667,6 +667,21 @@ class D2NNCoreTests(unittest.TestCase):
         _, positions, _ = resolve_activation_config(args, None)
         self.assertEqual(positions, (2, 4))
 
+    def test_resolve_activation_config_maps_all_placement_aliases(self):
+        parser = build_parser()
+        
+        args = parser.parse_args(["--layers", "5", "--activation-type", "coherent_amplitude", "--activation-placement", "front"])
+        _, positions_front, _ = resolve_activation_config(args, None)
+        self.assertEqual(positions_front, (1,))
+        
+        args = parser.parse_args(["--layers", "5", "--activation-type", "coherent_amplitude", "--activation-placement", "back"])
+        _, positions_back, _ = resolve_activation_config(args, None)
+        self.assertEqual(positions_back, (5,))
+        
+        args = parser.parse_args(["--layers", "5", "--activation-type", "coherent_amplitude", "--activation-placement", "all"])
+        _, positions_all, _ = resolve_activation_config(args, None)
+        self.assertEqual(positions_all, (1, 2, 3, 4, 5))
+
     def test_build_experiment_grid_returns_coherent_amplitude_position_sweep(self):
         parser = build_parser()
         args = parser.parse_args(

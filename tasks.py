@@ -337,6 +337,7 @@ def format_experiment_grid_commands(grid_name, args):
 def execute_experiment_grid(grid_name, args, runner):
     for spec in build_experiment_grid(grid_name, args):
         spec_args = argparse.Namespace(**vars(args))
+        spec_args.activation_positions = None
         for key, value in spec.items():
             setattr(spec_args, key, value)
         runner(spec_args)
