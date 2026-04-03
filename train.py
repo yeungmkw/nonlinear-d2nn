@@ -42,7 +42,12 @@ def build_parser():
         "--print-experiment-grid",
         type=str,
         default=None,
-        choices=["coherent_amplitude_positions", "coherent_amplitude_presets"],
+        choices=[
+            "coherent_amplitude_positions",
+            "coherent_amplitude_presets",
+            "coherent_phase_presets",
+            "coherent_activation_mechanisms",
+        ],
         help="print a predefined experiment command grid and exit",
     )
     parser.add_argument(

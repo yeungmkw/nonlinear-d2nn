@@ -504,6 +504,38 @@ class D2NNCoreTests(unittest.TestCase):
         self.assertEqual(hparams["gain_min"], 0.25)
         self.assertEqual(hparams["gain_max"], 0.95)
 
+    def test_resolve_activation_config_applies_coherent_phase_preset_defaults(self):
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "--activation-type",
+                "coherent_phase",
+                "--activation-preset",
+                "balanced",
+                "--activation-positions",
+                "2",
+            ]
+        )
+        activation_type, positions, hparams = resolve_activation_config(args, None)
+        self.assertEqual(activation_type, "coherent_phase")
+        self.assertEqual(positions, (2,))
+        self.assertEqual(hparams, {"gamma": 0.25})
+
+    def test_resolve_activation_config_lets_explicit_gamma_override_phase_preset(self):
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "--activation-type",
+                "coherent_phase",
+                "--activation-preset",
+                "balanced",
+                "--activation-gamma",
+                "0.4",
+            ]
+        )
+        _, _, hparams = resolve_activation_config(args, None)
+        self.assertEqual(hparams, {"gamma": 0.4})
+
     def test_resolve_activation_config_maps_mid_placement_alias(self):
         parser = build_parser()
         args = parser.parse_args(
@@ -559,6 +591,44 @@ class D2NNCoreTests(unittest.TestCase):
         self.assertTrue(all(item["experiment_stage"] == "placement_ablation" for item in grid))
         self.assertTrue(all(item["seed"] == 7 for item in grid))
 
+    def test_build_experiment_grid_returns_coherent_phase_preset_sweep(self):
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "--task",
+                "classification",
+                "--dataset",
+                "fashion-mnist",
+                "--layers",
+                "5",
+            ]
+        )
+        grid = build_experiment_grid("coherent_phase_presets", args)
+        self.assertEqual(len(grid), 3)
+        self.assertTrue(all(item["activation_type"] == "coherent_phase" for item in grid))
+        self.assertEqual([item["activation_preset"] for item in grid], ["conservative", "balanced", "aggressive"])
+        self.assertTrue(all(item["activation_placement"] == "mid" for item in grid))
+        self.assertTrue(all(item["experiment_stage"] == "mechanism_tuning" for item in grid))
+
+    def test_build_experiment_grid_returns_mechanism_ablation_commands(self):
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "--task",
+                "classification",
+                "--dataset",
+                "fashion-mnist",
+                "--layers",
+                "5",
+            ]
+        )
+        grid = build_experiment_grid("coherent_activation_mechanisms", args)
+        self.assertEqual(len(grid), 2)
+        self.assertEqual([item["activation_type"] for item in grid], ["coherent_amplitude", "coherent_phase"])
+        self.assertTrue(all(item["activation_preset"] == "balanced" for item in grid))
+        self.assertTrue(all(item["activation_placement"] == "mid" for item in grid))
+        self.assertTrue(all(item["experiment_stage"] == "mechanism_ablation" for item in grid))
+
     def test_format_experiment_grid_commands_renders_train_commands(self):
         parser = build_parser()
         args = parser.parse_args(
@@ -576,6 +646,26 @@ class D2NNCoreTests(unittest.TestCase):
         self.assertIn("python train.py", commands[0])
         self.assertIn("--activation-placement front", commands[0])
         self.assertIn("--activation-preset balanced", commands[0])
+
+    def test_format_experiment_grid_commands_renders_phase_and_mechanism_variants(self):
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "--task",
+                "classification",
+                "--dataset",
+                "fashion-mnist",
+                "--layers",
+                "5",
+            ]
+        )
+        phase_commands = format_experiment_grid_commands("coherent_phase_presets", args)
+        mechanism_commands = format_experiment_grid_commands("coherent_activation_mechanisms", args)
+        self.assertIn("--activation-type coherent_phase", phase_commands[0])
+        self.assertIn("--activation-preset conservative", phase_commands[0])
+        self.assertIn("--experiment-stage mechanism_ablation", mechanism_commands[0])
+        self.assertIn("--activation-type coherent_amplitude", mechanism_commands[0])
+        self.assertIn("--activation-type coherent_phase", mechanism_commands[1])
 
     def test_resolve_optics_uses_checkpoint_architecture_when_missing(self):
         state_dict = {

@@ -56,6 +56,13 @@ COHERENT_AMPLITUDE_PRESETS = {
 }
 
 
+COHERENT_PHASE_PRESETS = {
+    "conservative": {"gamma": 0.1},
+    "balanced": {"gamma": 0.25},
+    "aggressive": {"gamma": 0.5},
+}
+
+
 def parse_activation_positions(value):
     if value in (None, "", ()):
         return ()
@@ -102,9 +109,13 @@ def activation_preset_hparams(args=None):
         return {}
     activation_type = getattr(args, "activation_type", None)
     activation_preset = getattr(args, "activation_preset", None)
-    if activation_type != "coherent_amplitude" or not activation_preset:
+    if not activation_preset:
         return {}
-    return dict(COHERENT_AMPLITUDE_PRESETS[activation_preset])
+    if activation_type == "coherent_amplitude":
+        return dict(COHERENT_AMPLITUDE_PRESETS[activation_preset])
+    if activation_type == "coherent_phase":
+        return dict(COHERENT_PHASE_PRESETS[activation_preset])
+    return {}
 
 
 def resolve_activation_config(args=None, manifest=None):
@@ -212,6 +223,30 @@ def build_experiment_grid(grid_name, args):
                 "activation_placement": "mid",
             }
             for preset in ("conservative", "balanced", "aggressive")
+        ]
+
+    if grid_name == "coherent_phase_presets":
+        return [
+            {
+                **base,
+                "experiment_stage": "mechanism_tuning",
+                "activation_type": "coherent_phase",
+                "activation_preset": preset,
+                "activation_placement": "mid",
+            }
+            for preset in ("conservative", "balanced", "aggressive")
+        ]
+
+    if grid_name == "coherent_activation_mechanisms":
+        return [
+            {
+                **base,
+                "experiment_stage": "mechanism_ablation",
+                "activation_type": activation_type,
+                "activation_preset": "balanced",
+                "activation_placement": "mid",
+            }
+            for activation_type in ("coherent_amplitude", "coherent_phase")
         ]
 
     raise ValueError(f"Unsupported experiment grid: {grid_name}")
