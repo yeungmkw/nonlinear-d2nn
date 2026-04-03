@@ -40,7 +40,9 @@ def embed_rgb_amplitude_image(x, size, target_size=None):
 
     field = torch.zeros(batch, size, size, dtype=torch.cfloat, device=x.device)
     target_size = target_size or size // 3
-    patch_size = max(target_size // 4, 1)
+    patch_size = target_size // 4
+    if patch_size < 1:
+        raise ValueError(f"Target size ({target_size}) is too small to embed RGB channels.")
 
     resized = F.interpolate(x, size=(patch_size, patch_size), mode="bilinear", align_corners=False)
 
@@ -425,7 +427,12 @@ class D2NNImager(nn.Module):
 
     def _embed_input(self, x):
         target_size = max(int(self.size * self.input_fraction), 1)
-        return embed_amplitude_image(x, self.size, target_size=target_size)
+        channels = x.shape[1]
+        if channels == 1:
+            return embed_amplitude_image(x, self.size, target_size=target_size)
+        if channels == 3:
+            return embed_rgb_amplitude_image(x, self.size, target_size=target_size)
+        raise ValueError(f"Unsupported imaging input channels: {channels}")
 
     def build_target(self, x):
         target = self._embed_input(x).abs()

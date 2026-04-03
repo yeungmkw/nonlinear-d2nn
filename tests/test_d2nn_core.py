@@ -173,6 +173,20 @@ class D2NNCoreTests(unittest.TestCase):
         self.assertEqual(logits.shape, (2, 10))
         self.assertEqual(logits.dtype, torch.float32)
 
+    def test_rgb_embedding_raises_value_error_for_small_target_size(self):
+        from d2nn import embed_rgb_amplitude_image
+        x = torch.zeros(1, 3, 12, 12)
+        with self.assertRaisesRegex(ValueError, "too small"):
+            embed_rgb_amplitude_image(x, size=10, target_size=3)
+
+    def test_imager_accepts_rgb_inputs(self):
+        model = D2NNImager(**IMAGER_PAPER_OPTICS.with_overrides(size=24, num_layers=2).imager_model_kwargs())
+        x = torch.rand(2, 3, 8, 8)
+        target = model.build_target(x)
+        self.assertEqual(target.shape, (2, 24, 24))
+        output = model(x)
+        self.assertEqual(output.shape, (2, 24, 24))
+
     def test_imager_target_is_normalized(self):
         model = D2NNImager(**IMAGER_PAPER_OPTICS.with_overrides(size=20, num_layers=2).imager_model_kwargs())
         x = torch.rand(2, 1, 8, 8)
