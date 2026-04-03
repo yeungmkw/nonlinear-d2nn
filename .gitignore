@@ -20,3 +20,5 @@ exports/
 figures/
 
 *.log
+test_out_cmd.txt
+test_output.txt

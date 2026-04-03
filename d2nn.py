@@ -300,7 +300,7 @@ class D2NNBase(nn.Module):
         return torch.exp(1j * 2 * np.pi * kz * layer_distance) * propagating
 
     def propagate_embedded_field(self, u):
-        return propagate_output_field(u, self.layers, self.H_out, getattr(self, "activations", None))
+        return propagate_output_field(u, self.layers, self.H_out, self.activations)
 
     def propagate_field(self, x):
         return self.propagate_embedded_field(self._embed_input(x))
@@ -316,8 +316,6 @@ class D2NNBase(nn.Module):
         return collect_phase_masks(self.layers, wrap=wrap)
 
     def activation_diagnostics(self):
-        if not hasattr(self, "activations"):
-            return {}
         return {key: dict(module.last_stats) for key, module in self.activations.items() if module.last_stats}
 
     def _embed_input(self, x):
