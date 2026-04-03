@@ -9,7 +9,12 @@ import random
 import numpy as np
 import torch
 
-from tasks import format_experiment_grid_commands, run_classification_training, run_imaging_training
+from tasks import (
+    execute_experiment_grid,
+    format_experiment_grid_commands,
+    run_classification_training,
+    run_imaging_training,
+)
 
 
 def seed_everything(seed):
@@ -51,6 +56,20 @@ def build_parser():
             "activation_mechanisms",
         ],
         help="print a predefined experiment command grid and exit",
+    )
+    parser.add_argument(
+        "--run-experiment-grid",
+        type=str,
+        default=None,
+        choices=[
+            "coherent_amplitude_positions",
+            "coherent_amplitude_presets",
+            "coherent_phase_presets",
+            "coherent_activation_mechanisms",
+            "incoherent_intensity_presets",
+            "activation_mechanisms",
+        ],
+        help="run a predefined experiment grid sequentially",
     )
     parser.add_argument(
         "--run-name",
@@ -116,13 +135,26 @@ def main(argv=None):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
-    seed_everything(args.seed)
-    print(f"Seed: {args.seed}")
 
     repo_root = Path(__file__).parent
     data_dir = repo_root / "data"
     save_dir = repo_root / args.save_dir
     save_dir.mkdir(exist_ok=True)
+
+    def run_single(run_args):
+        seed_everything(run_args.seed)
+        print(f"Seed: {run_args.seed}")
+        if run_args.task == "classification":
+            run_classification_training(run_args, device, data_dir, save_dir)
+        else:
+            run_imaging_training(run_args, device, data_dir, save_dir)
+
+    if args.run_experiment_grid:
+        execute_experiment_grid(args.run_experiment_grid, args, run_single)
+        return
+
+    seed_everything(args.seed)
+    print(f"Seed: {args.seed}")
 
     if args.task == "classification":
         run_classification_training(args, device, data_dir, save_dir)

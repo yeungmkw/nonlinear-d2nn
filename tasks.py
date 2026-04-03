@@ -4,6 +4,7 @@ Consolidated D2NN task helpers for classification and imaging workflows.
 
 from __future__ import annotations
 
+import argparse
 import time
 
 import matplotlib.pyplot as plt
@@ -307,6 +308,14 @@ def format_experiment_grid_commands(grid_name, args):
         ]
         commands.append(" ".join(command_parts))
     return commands
+
+
+def execute_experiment_grid(grid_name, args, runner):
+    for spec in build_experiment_grid(grid_name, args):
+        spec_args = argparse.Namespace(**vars(args))
+        for key, value in spec.items():
+            setattr(spec_args, key, value)
+        runner(spec_args)
 
 
 def train_classification_one_epoch(model, loader, optimizer, device, num_classes=10):

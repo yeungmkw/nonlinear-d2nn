@@ -38,6 +38,7 @@ from train import build_parser
 from tasks import (
     build_experiment_grid,
     d2nn_mse_loss,
+    execute_experiment_grid,
     format_experiment_grid_commands,
     resolve_activation_config,
     resolve_experiment_seed,
@@ -462,6 +463,10 @@ class D2NNCoreTests(unittest.TestCase):
         self.assertAlmostEqual(args.activation_responsivity, 1.2)
         self.assertEqual(args.activation_emission_phase_mode, "zero")
 
+    def test_train_parser_accepts_run_experiment_grid(self):
+        args = build_parser().parse_args(["--run-experiment-grid", "activation_mechanisms"])
+        self.assertEqual(args.run_experiment_grid, "activation_mechanisms")
+
     def test_visualize_parser_accepts_seed(self):
         args = build_visualize_parser().parse_args(["--checkpoint", "checkpoints/demo.pth", "--seed", "11"])
         self.assertEqual(args.seed, 11)
@@ -798,6 +803,33 @@ class D2NNCoreTests(unittest.TestCase):
         self.assertIn("--activation-type incoherent_intensity", preset_commands[0])
         self.assertIn("--activation-preset conservative", preset_commands[0])
         self.assertIn("--activation-type incoherent_intensity", mechanism_commands[2])
+
+    def test_execute_experiment_grid_invokes_callback_for_each_spec(self):
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "--task",
+                "classification",
+                "--dataset",
+                "fashion-mnist",
+                "--layers",
+                "5",
+            ]
+        )
+        seen = []
+
+        def runner(spec_args):
+            seen.append((spec_args.activation_type, spec_args.activation_preset, spec_args.activation_placement))
+
+        execute_experiment_grid("activation_mechanisms", args, runner)
+        self.assertEqual(
+            seen,
+            [
+                ("coherent_amplitude", "balanced", "mid"),
+                ("coherent_phase", "balanced", "mid"),
+                ("incoherent_intensity", "balanced", "mid"),
+            ],
+        )
 
     def test_resolve_optics_uses_checkpoint_architecture_when_missing(self):
         state_dict = {
