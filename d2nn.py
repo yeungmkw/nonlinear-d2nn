@@ -259,7 +259,72 @@ class DiffractiveLayer(nn.Module):
         return torch.fft.ifft2(spectrum)
 
 
-class D2NN(nn.Module):
+class D2NNBase(nn.Module):
+    """Base optical forward model providing shared layers, propagation, and diagnostics."""
+
+    def __init__(
+        self,
+        num_layers,
+        size,
+        wavelength,
+        layer_distance,
+        pixel_size,
+        activation_type="none",
+        activation_positions=None,
+        activation_hparams=None,
+    ):
+        super().__init__()
+        self.size = size
+        self.activation_type = activation_type or "none"
+        self.activation_positions = normalize_activation_positions(activation_positions, num_layers)
+        self.activation_hparams = dict(activation_hparams or {})
+
+        self.layers = nn.ModuleList(
+            [DiffractiveLayer(size, wavelength, layer_distance, pixel_size) for _ in range(num_layers)]
+        )
+        self.activations = nn.ModuleDict()
+        if self.activation_type != "none":
+            for position in self.activation_positions:
+                activation = build_activation_module(self.activation_type, self.activation_hparams)
+                if activation is not None:
+                    self.activations[str(position)] = activation
+
+    @staticmethod
+    def _build_output_transfer(size, wavelength, layer_distance, pixel_size):
+        fx = torch.fft.fftfreq(size, d=pixel_size)
+        fy = torch.fft.fftfreq(size, d=pixel_size)
+        FX, FY = torch.meshgrid(fx, fy, indexing="ij")
+        sq = (1.0 / wavelength) ** 2 - FX**2 - FY**2
+        propagating = sq > 0
+        kz = torch.sqrt(torch.clamp(sq, min=0))
+        return torch.exp(1j * 2 * np.pi * kz * layer_distance) * propagating
+
+    def propagate_embedded_field(self, u):
+        return propagate_output_field(u, self.layers, self.H_out, getattr(self, "activations", None))
+
+    def propagate_field(self, x):
+        return self.propagate_embedded_field(self._embed_input(x))
+
+    @staticmethod
+    def output_intensity_from_field(field):
+        return torch.abs(field) ** 2
+
+    def output_intensity(self, x):
+        return self.output_intensity_from_field(self.propagate_field(x))
+
+    def export_phase_masks(self, wrap=True):
+        return collect_phase_masks(self.layers, wrap=wrap)
+
+    def activation_diagnostics(self):
+        if not hasattr(self, "activations"):
+            return {}
+        return {key: dict(module.last_stats) for key, module in self.activations.items() if module.last_stats}
+
+    def _embed_input(self, x):
+        raise NotImplementedError("Subclasses must implement input embedding.")
+
+
+class D2NN(D2NNBase):
     """Diffractive classifier."""
 
     def __init__(
@@ -275,37 +340,23 @@ class D2NN(nn.Module):
         activation_positions=None,
         activation_hparams=None,
     ):
-        super().__init__()
-        self.size = size
-        self.num_classes = num_classes
-        self.activation_type = activation_type or "none"
-        self.activation_positions = normalize_activation_positions(activation_positions, num_layers)
-        self.activation_hparams = dict(activation_hparams or {})
-
-        self.layers = nn.ModuleList(
-            [DiffractiveLayer(size, wavelength, layer_distance, pixel_size) for _ in range(num_layers)]
+        super().__init__(
+            num_layers=num_layers,
+            size=size,
+            wavelength=wavelength,
+            layer_distance=layer_distance,
+            pixel_size=pixel_size,
+            activation_type=activation_type,
+            activation_positions=activation_positions,
+            activation_hparams=activation_hparams,
         )
-        self.activations = nn.ModuleDict()
-        if self.activation_type != "none":
-            for position in self.activation_positions:
-                activation = build_activation_module(self.activation_type, self.activation_hparams)
-                if activation is not None:
-                    self.activations[str(position)] = activation
+        self.num_classes = num_classes
+
         self.register_buffer(
             "H_out",
             self._build_output_transfer(size, wavelength, layer_distance, pixel_size),
         )
         self.register_buffer("detector_masks", self._build_detectors(size, num_classes, detector_size))
-
-    @staticmethod
-    def _build_output_transfer(size, wavelength, layer_distance, pixel_size):
-        fx = torch.fft.fftfreq(size, d=pixel_size)
-        fy = torch.fft.fftfreq(size, d=pixel_size)
-        FX, FY = torch.meshgrid(fx, fy, indexing="ij")
-        sq = (1.0 / wavelength) ** 2 - FX**2 - FY**2
-        propagating = sq > 0
-        kz = torch.sqrt(torch.clamp(sq, min=0))
-        return torch.exp(1j * 2 * np.pi * kz * layer_distance) * propagating
 
     @staticmethod
     def _build_detectors(size, num_classes, detector_size=None):
@@ -332,19 +383,6 @@ class D2NN(nn.Module):
     def forward(self, x):
         return self.detect_from_intensity(self.output_intensity(x))
 
-    def propagate_embedded_field(self, u):
-        return propagate_output_field(u, self.layers, self.H_out, self.activations)
-
-    def propagate_field(self, x):
-        return self.propagate_embedded_field(self._embed_input(x))
-
-    @staticmethod
-    def output_intensity_from_field(field):
-        return torch.abs(field) ** 2
-
-    def output_intensity(self, x):
-        return self.output_intensity_from_field(self.propagate_field(x))
-
     def detect_from_intensity(self, intensity):
         batch = intensity.shape[0]
         class_intensities = torch.zeros(batch, self.num_classes, device=intensity.device)
@@ -361,14 +399,8 @@ class D2NN(nn.Module):
             return embed_rgb_amplitude_image(x, self.size, target_size=self.size // 3)
         raise ValueError(f"Unsupported classification input channels: {channels}")
 
-    def export_phase_masks(self, wrap=True):
-        return collect_phase_masks(self.layers, wrap=wrap)
 
-    def activation_diagnostics(self):
-        return {key: dict(module.last_stats) for key, module in self.activations.items() if module.last_stats}
-
-
-class D2NNImager(nn.Module):
+class D2NNImager(D2NNBase):
     """D2NN variant for image reconstruction / imaging-lens experiments."""
 
     def __init__(
@@ -383,44 +415,27 @@ class D2NNImager(nn.Module):
         activation_positions=None,
         activation_hparams=None,
     ):
-        super().__init__()
-        self.size = size
-        self.input_fraction = input_fraction
-        self.activation_type = activation_type or "none"
-        self.activation_positions = normalize_activation_positions(activation_positions, num_layers)
-        self.activation_hparams = dict(activation_hparams or {})
-
-        self.layers = nn.ModuleList(
-            [DiffractiveLayer(size, wavelength, layer_distance, pixel_size) for _ in range(num_layers)]
+        super().__init__(
+            num_layers=num_layers,
+            size=size,
+            wavelength=wavelength,
+            layer_distance=layer_distance,
+            pixel_size=pixel_size,
+            activation_type=activation_type,
+            activation_positions=activation_positions,
+            activation_hparams=activation_hparams,
         )
-        self.activations = nn.ModuleDict()
-        if self.activation_type != "none":
-            for position in self.activation_positions:
-                activation = build_activation_module(self.activation_type, self.activation_hparams)
-                if activation is not None:
-                    self.activations[str(position)] = activation
+        self.input_fraction = input_fraction
+
         self.register_buffer(
             "H_out",
-            D2NN._build_output_transfer(size, wavelength, layer_distance, pixel_size),
+            self._build_output_transfer(size, wavelength, layer_distance, pixel_size),
         )
 
     def forward(self, x):
         intensity = self.output_intensity(x)
         max_vals = intensity.amax(dim=(-2, -1), keepdim=True).clamp_min(1e-8)
         return intensity / max_vals
-
-    def propagate_embedded_field(self, u):
-        return propagate_output_field(u, self.layers, self.H_out, self.activations)
-
-    def propagate_field(self, x):
-        return self.propagate_embedded_field(self._embed_input(x))
-
-    @staticmethod
-    def output_intensity_from_field(field):
-        return torch.abs(field) ** 2
-
-    def output_intensity(self, x):
-        return self.output_intensity_from_field(self.propagate_field(x))
 
     def propagate(self, x):
         return self.output_intensity(x)
@@ -438,9 +453,3 @@ class D2NNImager(nn.Module):
         target = self._embed_input(x).abs()
         max_vals = target.amax(dim=(-2, -1), keepdim=True).clamp_min(1e-8)
         return target / max_vals
-
-    def export_phase_masks(self, wrap=True):
-        return collect_phase_masks(self.layers, wrap=wrap)
-
-    def activation_diagnostics(self):
-        return {key: dict(module.last_stats) for key, module in self.activations.items() if module.last_stats}

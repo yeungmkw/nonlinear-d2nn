@@ -18,7 +18,7 @@ This design stays aligned with the current Obsidian notes:
 Run the minimum additional experiment matrix needed to turn the current RGB result from a stage freeze into a stability-confirmed stage:
 
 - keep the existing paired comparison format
-- add exactly `3` more seeds
+- add exactly `3` more seeds: `seed=123`, `seed=0`, `seed=2025`
 - preserve all non-seed variables
 - summarize the five paired runs using per-seed lift, mean, and spread
 
@@ -54,23 +54,44 @@ This step explicitly does **not**:
 
 Already completed:
 
-- `seed=42`: baseline `44.01%`, nonlinear `46.60%`, lift `+2.59`
-- `seed=7`: baseline `44.12%`, nonlinear `47.08%`, lift `+2.96`
+| seed | baseline test | nonlinear test | lift | baseline best-val | nonlinear best-val |
+|------|--------------|---------------|------|-------------------|--------------------|
+| 42   | 44.01%       | 46.60%        | +2.59 | 44.20%           | 46.78%             |
+| 7    | 44.12%       | 47.08%        | +2.96 | —                | —                  |
+
+> Note: `seed=7` val accuracy was not recorded at freeze time; leave as `—` rather than backfill.
 
 This stage adds:
 
-- `3` additional seeds
+- seeds `123`, `0`, `2025` (in that order)
 - for each new seed, one baseline run and one nonlinear run
+- the reference naming base for comparison is the `nonlinear-incoherent-back-cifar10-rgb-v1` release
 
 The result should be a final `5-seed` paired table with:
 
-- baseline accuracy per seed
-- nonlinear accuracy per seed
+- baseline test accuracy per seed
+- nonlinear test accuracy per seed
 - per-seed lift
 - five-seed mean baseline accuracy
 - five-seed mean nonlinear accuracy
 - mean lift
-- observed spread or min/max range
+- observed lift spread (max − min across seeds)
+
+Example CLI for each new seed pair (substitute `X` and `SEEDVAL`):
+
+```bash
+# baseline arm
+uv run python train.py --task classification --dataset cifar10-rgb \
+  --layers 5 --size 200 --epochs 10 --batch-size 64 --lr 0.01 \
+  --seed SEEDVAL --run-name cifar10_rgb_baseline_10ep_seedX
+
+# nonlinear arm
+uv run python train.py --task classification --dataset cifar10-rgb \
+  --layers 5 --size 200 --epochs 10 --batch-size 64 --lr 0.01 \
+  --seed SEEDVAL --activation-type incoherent_intensity \
+  --activation-placement back --activation-preset balanced \
+  --run-name cifar10_rgb_incoherent_back_10ep_seedX
+```
 
 ## Naming and Artifact Policy
 
@@ -97,10 +118,10 @@ Review order:
 
 The review must look for:
 
-- manifest and run-name consistency
+- manifest and run-name consistency (compare against the `nonlinear-incoherent-back-cifar10-rgb-v1` release naming as the reference baseline)
 - accidental baseline/nonlinear mismatch in the paired seed table
-- CLI/config drift
-- missing or ambiguous artifact naming
+- CLI/config drift from the Fixed Experiment Surface above
+- missing or ambiguous artifact naming, especially `seed` and `10ep` encoding in filenames
 - notebook-log drift from the recorded stage interpretation
 
 After review:
@@ -117,9 +138,26 @@ This design is complete when:
 - the summary statistics are computed and written down
 - an independent review is completed and logged honestly
 - both Obsidian notes are updated with the stability conclusion
-- the project is ready for the next decision point:
-  - continue to longer RGB training budgets
-  - or stop and freeze this stronger RGB stability stage
+
+### Minimum Stability Condition
+
+Stability is **confirmed** if all of the following hold:
+
+- at least `4` out of `5` seeds show lift `> +1.5 pt`
+- no single seed shows lift `< 0` (i.e., nonlinear never falls below baseline)
+- five-seed mean lift `> +2.0 pt`
+
+If the data falls short of this bar, record it plainly as "stability inconclusive" rather than forcing a positive conclusion.
+
+### Next-Step Decision Criteria
+
+After the 5-seed table is complete, decide as follows:
+
+- **Continue to longer RGB training budgets** if: mean lift `> +2.5 pt` AND spread (max − min lift) `< 1.5 pt`. This indicates a sufficiently stable advantage worth investing more compute.
+- **Freeze this stage and stop** if: mean lift is between `+1.5 pt` and `+2.5 pt`, or spread `≥ 1.5 pt`. The result is real but not compelling enough to justify further budget increases without a new idea.
+- **Flag for re-examination** if: minimum stability condition above is not met. Do not extend before understanding why a seed failed.
+
+This decision is made by human judgment after reviewing the table, not by the automated pipeline.
 
 ## Risks and Guardrails
 
@@ -140,6 +178,12 @@ Guardrail:
 Guardrail:
 
 - keep the written conclusion framed as `RGB stability confirmation`, not `new mechanism discovery`
+
+### Risk: Lift spread too large to support stability claim
+
+Guardrail:
+
+- if spread (max − min lift across 5 seeds) `≥ 2.0 pt`, do not write "stable"; write "directional but variable" and note which seed drove the outlier before continuing
 
 ### Risk: Overclaiming review provenance
 
