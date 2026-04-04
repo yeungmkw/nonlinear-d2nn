@@ -1,4 +1,4 @@
-# Nonlinear-d2nn
+# nonlinear-d2nn
 
 A PyTorch implementation of the Diffractive Deep Neural Network (D2NN) architecture, originally proposed by [Lin et al., *Science* 2018](https://doi.org/10.1126/science.aat8084). 
 
@@ -23,8 +23,8 @@ Clone the repository and install dependencies using [uv](https://github.com/astr
 
 ```bash
 # Clone the repository
-git clone https://github.com/yeungmkw/Nonlinear-d2nn.git
-cd Nonlinear-d2nn
+git clone https://github.com/yeungmkw/nonlinear-d2nn.git
+cd nonlinear-d2nn
 
 # Install dependencies using uv
 uv sync
