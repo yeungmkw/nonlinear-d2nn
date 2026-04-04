@@ -1,17 +1,17 @@
-# Nonlinear-d2nn
+# Nonlinear-D2NN
 
-A PyTorch implementation of the Diffractive Deep Neural Network (D2NN) architecture, originally proposed by [Lin et al., *Science* 2018](https://doi.org/10.1126/science.aat8084). 
+A PyTorch-based reproduction and extension codebase for the Diffractive Deep Neural Network (D2NN) architecture introduced by [Lin et al., *Science* 2018](https://doi.org/10.1126/science.aat8084).
 
-This repository provides a robust numerical simulation framework for D2NNs, capable of end-to-end training and inference for both classification and lens imaging tasks. It also features extensions for studying the impact of non-linear activation mechanisms within optical layers, and tools for exporting trained model weights directly into physically manufacturable 3D phase plate formats (e.g., STL).
+This repository focuses on numerical simulation, experiment management, and phase-plate export for D2NN classification and imaging tasks. In addition to the phase-only baseline, it includes configurable nonlinear field activations for mechanism and placement studies.
 
 ## Features
 
-- **Phase-only Forward Propagation**: A faithful numerical simulation of free-space angular spectrum propagation and phase-only modulation.
-- **Task Support**: 
-  - Image Classification (MNIST, Fashion-MNIST, CIFAR-10)
-  - Imaging Lens Simulation (STL10)
-- **Non-linear Activation Extensions**: Configurable optical activation mechanisms (`coherent_amplitude`, `coherent_phase`, `incoherent_intensity`) and placement ablations (`front`, `mid`, `back`, `all`).
-- **Physical Export Toolchain**: Extracts checkpoint weights to physical height/thickness representations and generates ready-to-print 3D STL files for fabrication.
+- **Phase-only Forward Propagation**: Numerical simulation of free-space angular spectrum propagation with phase-only modulation.
+- **Task Support**:
+  - Image classification on MNIST, Fashion-MNIST, CIFAR-10 (grayscale), and CIFAR-10 (RGB)
+  - Imaging experiments on STL10 or custom `imagefolder` datasets
+- **Nonlinear Activation Extensions**: Configurable optical activation mechanisms (`coherent_amplitude`, `coherent_phase`, `incoherent_intensity`) and placement ablations (`front`, `mid`, `back`, `all`).
+- **Physical Export Toolchain**: Converts trained phase masks into thickness / height-map representations and optional STL exports for fabrication-oriented workflows.
 
 ## Installation
 
@@ -19,7 +19,7 @@ Requirements:
 - Python 3.11+
 - PyTorch 2.0+ 
 
-Clone the repository and install dependencies using [uv](https://github.com/astral-sh/uv) (recommended) or pip:
+Clone the repository and install dependencies using [uv](https://github.com/astral-sh/uv) (recommended):
 
 ```bash
 # Clone the repository
@@ -29,14 +29,14 @@ cd nonlinear-d2nn
 # Install dependencies using uv
 uv sync
 
-# Or using pip
-pip install -e .
+# Include test dependencies and notebook support when needed
+uv sync --dev --extra notebook
 ```
 
 ## Quick Start
 
 ### 1. Training a Model
-The `train.py` script acts as the entrypoint for all model configurations. Datasets are downloaded automatically.
+The `train.py` script is the main entrypoint for both classification and imaging workflows. Standard torchvision datasets are downloaded automatically when supported; `imagefolder` mode requires `--image-root`.
 
 **Train a 5-layer classification model on Fashion-MNIST:**
 ```bash
@@ -48,17 +48,18 @@ uv run python train.py --task classification --dataset fashion-mnist --epochs 20
 uv run python train.py --task imaging --dataset stl10 --epochs 10 --size 200 --layers 5 --image-size 64 --batch-size 4
 ```
 
-### 2. Exploring Non-linear Activations
-You can introduce optical non-linearities at a specific layer (`--activation-positions`) using the designated physical mechanism.
+### 2. Exploring Nonlinear Activations
+You can enable optical nonlinearities after selected diffractive layers using either explicit layer indices (`--activation-positions`) or placement aliases (`--activation-placement`).
 
 ```bash
-uv run python train.py --task classification --dataset cifar10 --epochs 20 \
-    --activation-type incoherent_intensity --activation-positions 5 \
-    --activation-threshold 0.1 --activation-responsivity 1.0
+uv run python train.py --task classification --dataset cifar10-rgb --epochs 10 \
+    --size 200 --layers 5 \
+    --activation-type incoherent_intensity --activation-placement back \
+    --activation-preset balanced
 ```
 
 ### 3. Inference and Visualization
-Evaluate a checkpoint and visualize its energy distribution, confusion matrix, or phase mask structures.
+After training a checkpoint, you can visualize detector outputs, confusion matrices, reconstructed images, or phase-mask structures.
 
 ```bash
 uv run python visualize.py --task classification --dataset fashion-mnist \
@@ -66,28 +67,29 @@ uv run python visualize.py --task classification --dataset fashion-mnist \
 ```
 
 ### 4. Phase Plate Manufacturing Export
-Export learned phase shifts into physical parameters (thickness, phase masks) and 3D STL models based on specified material physics.
+Given an existing checkpoint, export learned phase shifts into physical parameters (height maps, wrapped phase masks) and optional STL meshes based on specified material settings.
 
 ```bash
 uv run python export_phase_plate.py --task classification \
     --checkpoint checkpoints/best_fashion_mnist.pth --export-stl
 ```
-*Outputs are generated under `exports/<checkpoint_name>/`, including a comprehensive `.md` report, `.npy` arrays, layer-wise `.csv` data, and `.stl` files.*
+*Outputs are generated under `exports/<checkpoint_name>/`, including a Markdown report, `.npy` arrays, layer-wise `.csv` data, and optional `.stl` files.*
 
 ## Project Structure
 
-- `d2nn.py`: Core logic for optical field propagation (`D2NNBase`, `D2NN`, `D2NNImager`) and non-linear layers.
+- `d2nn.py`: Core logic for optical field propagation (`D2NNBase`, `D2NN`, `D2NNImager`) and nonlinear layers.
 - `train.py`: Unified training entrypoint parsing CLI parameters for both classification and imaging.
 - `visualize.py`: Inference visualization logic for test sets and phase mask plots.
 - `export_phase_plate.py`: Converts model tensor weights to physical dimensions.
-- `tasks.py`: Dataset loading, split rules, test loops, and training workflows.
-- `artifacts.py`: Checkpoint saving workflows, metadata manifests, and default optical parameters.
+- `tasks.py`: Dataset loading, split rules, activation configuration, and task-specific training / evaluation workflows.
+- `artifacts.py`: Checkpoint handling, manifest helpers, optics presets, and export utilities.
 
 ## Known Limitations & Scope
 
 - **Numerical Simulation Only**: This repository serves as a numerical verification & architectural exploration framework. It does not integrate physical optical tabletop experiments.
 - **Physical Accuracy Limitations**: The propagation simulation operates under paraxial approximations using the Angular Spectrum Method (ASM); highly skewed diffraction setups may require more rigorous physics routines.
-- **Fabrication-aware Training**: While physical boundaries and quantizations can be exported post-training, strict manufacturing penalty constraints during the gradient descent phase (`fabrication-aware training`) are not fully integrated.
+- **Imaging Scope**: The current imaging examples use STL10 or custom image folders rather than the paper's ImageNet-style natural-image showcase.
+- **Fabrication-aware Training**: Physical boundaries and quantizations can be exported after training, but fabrication constraints are not yet deeply integrated into the optimization loop.
 
 ## References
 
@@ -95,4 +97,4 @@ uv run python export_phase_plate.py --task classification \
 
 ## License
 
-MIT License. See [LICENSE](LICENSE) for details.
+License terms have not been finalized in this repository yet.
