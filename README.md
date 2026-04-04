@@ -26,6 +26,8 @@ Requirements:
 
 Clone the repository and install dependencies using [uv](https://github.com/astral-sh/uv) (recommended):
 
+Some checkpoints and larger experiment artifacts may be distributed through GitHub Releases instead of being committed directly to the repository.
+
 ```bash
 # Clone the repository
 git clone https://github.com/yeungmkw/nonlinear-d2nn.git
