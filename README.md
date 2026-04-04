@@ -23,22 +23,36 @@ This branch focuses on the phase-only baseline pipeline for D2NN classification,
 Requirements:
 - Python 3.11+
 - PyTorch 2.0+
+- CUDA-capable GPU recommended (CPU works for unit tests)
 
-Clone the repository and install dependencies using [uv](https://github.com/astral-sh/uv) (recommended):
-
-Some checkpoints and larger experiment artifacts may be distributed through GitHub Releases instead of being committed directly to the repository.
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) if you do not have it yet:
 
 ```bash
-# Clone the repository
+# Linux / macOS
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Windows (PowerShell)
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+Clone and install:
+
+```bash
 git clone https://github.com/yeungmkw/nonlinear-d2nn.git
 cd nonlinear-d2nn
 
-# Switch to the phase-only baseline branch
 git checkout phase-only-baseline
 
-# Install dependencies
+# GPU training (default): installs PyTorch from the CUDA 12.6 index
 uv sync
+
+# To install dev/test dependencies as well:
+uv sync --dev
 ```
+
+> **CPU-only environment (CI / no GPU):** use the CPU PyTorch wheel index instead of the CUDA-configured project default when creating the environment.
+
+> Some checkpoints and larger experiment artifacts are available from [GitHub Releases](https://github.com/yeungmkw/nonlinear-d2nn/releases) and are not included in the repository itself.
 
 ## Quick Start
 
