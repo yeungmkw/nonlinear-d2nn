@@ -13,6 +13,7 @@ CLAUDE.md
 fix_path.ps1
 python_paths.txt
 %SystemDrive%/
+docs/superpowers/
 
 data/
 checkpoints/
@@ -20,5 +21,8 @@ exports/
 figures/
 
 *.log
+pytest.log
+pytest_*.txt
+test_*.txt
 test_out_cmd.txt
 test_output.txt
