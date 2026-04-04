@@ -1,169 +1,98 @@
-# D2NN
+# D2NN (Diffractive Deep Neural Network)
 
-简洁版 D2NN 复现仓库，对应 Lin et al., Science 2018。
+A PyTorch implementation of the Diffractive Deep Neural Network (D2NN) architecture, originally proposed by [Lin et al., *Science* 2018](https://doi.org/10.1126/science.aat8084). 
 
-当前覆盖三条主线：
-- MNIST 分类
-- Fashion-MNIST 分类
-- 成像透镜
+This repository provides a robust numerical simulation framework for D2NNs, capable of end-to-end training and inference for both classification and lens imaging tasks. It also features extensions for studying the impact of non-linear activation mechanisms within optical layers, and tools for exporting trained model weights directly into physically manufacturable 3D phase plate formats (e.g., STL).
 
-仓库中的主要程序分工如下：
-- `train.py`: 统一训练入口，负责启动分类或成像任务。
-- `visualize.py`: 统一可视化入口，负责生成相位掩膜、输出能量和重建结果图。
-- `export_phase_plate.py`: 相位板导出入口，负责把 checkpoint 转成 phase mask、height map、CSV 和 STL。
-- `d2nn.py`: 光学传播和 D2NN 模型定义，是核心前向实现。
-- `tasks.py`: 任务层封装，负责数据集、训练循环、评估和可视化调度。
-- `artifacts.py`: checkpoint、manifest、制造导出和共享工具函数。
-- `tests/`: 最小测试集，负责 smoke check 和核心工具回归验证。
+## Features
 
-## 当前状态
+- **Phase-only Forward Propagation**: A faithful numerical simulation of free-space angular spectrum propagation and phase-only modulation.
+- **Task Support**: 
+  - Image Classification (MNIST, Fashion-MNIST, CIFAR-10)
+  - Imaging Lens Simulation (STL10)
+- **Non-linear Activation Extensions**: Configurable optical activation mechanisms (`coherent_amplitude`, `coherent_phase`, `incoherent_intensity`) and placement ablations (`front`, `mid`, `back`, `all`).
+- **Physical Export Toolchain**: Extracts checkpoint weights to physical height/thickness representations and generates ready-to-print 3D STL files for fabrication.
 
-这套仓库现在更适合作为 `主文数值复现 + 相位板导出前处理` 的交付包，而不是完整实验系统。
+## Installation
 
-当前已经完成：
-- 主文分类主线的数值复现
-- 成像链路的功能性复现
-- 从 checkpoint 到 phase mask / height map / CSV / STL 的导出
+Requirements:
+- Python 3.11+
+- PyTorch 2.0+ 
 
-当前还没有完成：
-- 与论文原始 ImageNet 成像展示的严格对齐
-- 真实光路实验验证
-- fabrication-aware 训练与误差鲁棒性扫描
-
-## 结构与程序作用
-
-- `d2nn.py`: 核心光学模型
-- `tasks.py`: 分类与成像任务逻辑
-- `artifacts.py`: optics / checkpoint / manifest / 可视化 / 制造导出共用工具
-- `train.py`: 统一训练入口
-- `visualize.py`: 统一可视化入口
-- `export_phase_plate.py`: 相位板数值导出
-- `tests/`: 最小测试集
-
-## 推荐复现路径
-
-如果只想快速确认当前仓库能否复现主线，推荐按下面顺序跑：
-
-1. 分类基线：
+Clone the repository and install dependencies using [uv](https://github.com/astral-sh/uv) (recommended) or pip:
 
 ```bash
-uv run python visualize.py --task classification --dataset fashion-mnist --checkpoint checkpoints/best_fashion_mnist.pth --no-show
+# Clone the repository
+git clone https://github.com/yourusername/d2nn.git
+cd d2nn
+
+# Install dependencies using uv
+uv sync
+
+# Or using pip
+pip install -e .
 ```
 
-预期产物：
-- `figures/fashion_mnist/phase_masks.png`
-- `figures/fashion_mnist/output_energy.png`
-- `figures/fashion_mnist/confusion_matrix.png`
+## Quick Start
 
-2. 成像基线：
+### 1. Training a Model
+The `train.py` script acts as the entrypoint for all model configurations. Datasets are downloaded automatically.
 
+**Train a 5-layer classification model on Fashion-MNIST:**
 ```bash
-uv run python visualize.py --task imaging --dataset stl10 --checkpoint checkpoints/best_imager_stl10.pth --no-show
-```
-
-预期产物：
-- `figures/imager/phase_masks.png`
-- `figures/imager/sample_reconstructions.png`
-
-3. 相位板导出基线：
-
-```bash
-uv run python export_phase_plate.py --task classification --checkpoint checkpoints/best_fashion_mnist.pth --export-stl
-```
-
-预期产物：
-- `exports/best_fashion_mnist/metadata.json`
-- `exports/best_fashion_mnist/report.md`
-- `exports/best_fashion_mnist/layers/`
-- `exports/best_fashion_mnist/stl/`
-
-## 推荐 checkpoint
-
-- 论文主线 `5 层 / 200x200` 的分类基线，优先使用 `checkpoints/best_fashion_mnist.pth`
-- 如果要看 MNIST 的 5 层主线备份，优先使用 `checkpoints/best_mnist.pre_retrain_20260327.pth`
-- 如果要看成像链路，使用 `checkpoints/best_imager_stl10.pth`
-- 不要把 `checkpoints/best_mnist.pth` 当作当前 paper-faithful 主线，它现在实际是 `3 层 / 100x100`
-
-## 阶段产物管理
-
-- 源码仓库默认保留源码、文档、manifest 和小体积可编辑参考文件，例如 `docs/baselines/` 下的 phase CSV。
-- 阶段性 checkpoint、导出包、相位文件和其他大体积实验资产，默认通过 GitHub Releases 归档与分发。
-- 进入新阶段前，先用 tag 或专用分支冻结上一阶段源码边界，再整理对应 release assets。
-
-## 分支阶段约定
-
-- `phase-only-baseline`: 保留无线性层阶段的完整可编辑主线。
-- `main`: 当前研究推进主线，已进入 nonlinear 工程。
-- `pre-nonlinear-phase-only-v1`: 非线性前的冻结快照 tag，对应纯 phase-only 阶段发布节点。
-
-当前边界约定是：
-- 需要回看、修补、重跑原始相位型主线时，使用 `phase-only-baseline`
-- 继续做 activation、位置消融和后续非线性实验时，使用 `main`
-- 每完成一个重要阶段，再补一个新的 tag 和 release，而不是回写旧阶段分支
-
-## 论文对照结果
-
-| 任务 | 论文记录 | 当前仓库结果 | 对齐情况 |
-|------|------|------|------|
-| MNIST 分类 | `97.61%` | `97.63% (9763/10000)` | 数值结果基本对齐，但当前默认 `best_mnist.pth` 已不是 5 层主线 checkpoint |
-| Fashion-MNIST 分类 | `81.13%` | `87.49%` | 功能与结构对齐，当前训练结果高于论文记录 |
-| 成像透镜 | 主文展示 ImageNet 自然图像成像 | `STL10`, `Test MSE = 0.0259` | 完成功能链路复验，但数据源不是论文原始展示 |
-
-## 常用命令
-
-```bash
-uv run python train.py --task classification --dataset mnist --epochs 20 --size 200 --layers 5
 uv run python train.py --task classification --dataset fashion-mnist --epochs 20 --size 200 --layers 5
-uv run python train.py --task imaging --dataset stl10 --epochs 10 --size 200 --layers 5 --image-size 64 --batch-size 4
-
-uv run python visualize.py --task classification --dataset mnist --checkpoint checkpoints/best_mnist.pth --no-show
-uv run python visualize.py --task classification --dataset fashion-mnist --checkpoint checkpoints/best_fashion_mnist.pth --no-show
-uv run python visualize.py --task imaging --dataset stl10 --checkpoint checkpoints/best_imager_stl10.pth --no-show
-
-uv run python export_phase_plate.py --task classification --checkpoint checkpoints/best_fashion_mnist.pth
-uv run python export_phase_plate.py --task imaging --checkpoint checkpoints/best_imager_stl10.pth
 ```
 
-## 导出产物
+**Train an imaging lens on STL10 natural images:**
+```bash
+uv run python train.py --task imaging --dataset stl10 --epochs 10 --size 200 --layers 5 --image-size 64 --batch-size 4
+```
 
-`export_phase_plate.py` 会在 `exports/<checkpoint_stem>/` 下生成：
-- `phase_masks.npy`
-- `height_map.npy`
-- `height_map_manufacturable.npy`
-- `thickness_map.npy`
-- `height_map_quantized.npy`
-- `metadata.json`
-- `report.md`
-- `layers/`
-- `stl/`（传 `--export-stl` 时）
-
-其中 `layers/` 下会按层导出：
-- `layer_XX_phase_rad.csv`
-- `layer_XX_height_um.csv`
-- `layer_XX_thickness_um.csv`
-- `layer_XX_height_quantized.csv`
-
-这一步是从数值复现走向真实相位板的公共桥接层。
-
-## 验证
+### 2. Exploring Non-linear Activations
+You can introduce optical non-linearities at a specific layer (`--activation-positions`) using the designated physical mechanism.
 
 ```bash
-uv run python -m unittest discover -s tests -v
+uv run python train.py --task classification --dataset cifar10 --epochs 20 \
+    --activation-type incoherent_intensity --activation-positions 5 \
+    --activation-threshold 0.1 --activation-responsivity 1.0
 ```
 
-最小 smoke check 已覆盖：
-- `train.py --help`
-- `visualize.py --help`
-- `export_phase_plate.py --help`
+### 3. Inference and Visualization
+Evaluate a checkpoint and visualize its energy distribution, confusion matrix, or phase mask structures.
 
-## 当前注意事项
+```bash
+uv run python visualize.py --task classification --dataset fashion-mnist \
+    --checkpoint checkpoints/best_fashion_mnist.pth
+```
 
-- 当前顶层主文件已经收敛到 `d2nn.py`、`tasks.py`、`artifacts.py`、`train.py`、`visualize.py`、`export_phase_plate.py`
-- `checkpoints/best_mnist.pth` 当前实际是 `3 层 / 100x100`
-- 如果要沿主文 `5 层 / 200x200` 基线继续推进，更稳的是：
-  - `checkpoints/best_mnist.pre_retrain_20260327.pth`
-  - `checkpoints/best_fashion_mnist.pth`
-  - `checkpoints/best_imager_stl10.pth`
-- `checkpoints/best_fashion_mnist.pth` 的完整导出与 `STL` 已验证通过，当前更适合作为第一版样片基线
-- 以当前 `wavelength = 750 um`、`refractive index = 1.7227`、`ambient index = 1.0` 计算，完整 `2pi` 相位包裹对应的最大浮雕高度约为 `1037.8 um`
-- `--max-relief-um 300` 会让 `best_fashion_mnist.pth` 每层约 `50%` 的像素被截平，这个值不适合作为当前默认工艺上限
+### 4. Phase Plate Manufacturing Export
+Export learned phase shifts into physical parameters (thickness, phase masks) and 3D STL models based on specified material physics.
+
+```bash
+uv run python export_phase_plate.py --task classification \
+    --checkpoint checkpoints/best_fashion_mnist.pth --export-stl
+```
+*Outputs are generated under `exports/<checkpoint_name>/`, including a comprehensive `.md` report, `.npy` arrays, layer-wise `.csv` data, and `.stl` files.*
+
+## Project Structure
+
+- `d2nn.py`: Core logic for optical field propagation (`D2NNBase`, `D2NN`, `D2NNImager`) and non-linear layers.
+- `train.py`: Unified training entrypoint parsing CLI parameters for both classification and imaging.
+- `visualize.py`: Inference visualization logic for test sets and phase mask plots.
+- `export_phase_plate.py`: Converts model tensor weights to physical dimensions.
+- `tasks.py`: Dataset loading, split rules, test loops, and training workflows.
+- `artifacts.py`: Checkpoint saving workflows, metadata manifests, and default optical parameters.
+
+## Known Limitations & Scope
+
+- **Numerical Simulation Only**: This repository serves as a numerical verification & architectural exploration framework. It does not integrate physical optical tabletop experiments.
+- **Physical Accuracy Limitations**: The propagation simulation operates under paraxial approximations using the Angular Spectrum Method (ASM); highly skewed diffraction setups may require more rigorous physics routines.
+- **Fabrication-aware Training**: While physical boundaries and quantizations can be exported post-training, strict manufacturing penalty constraints during the gradient descent phase (`fabrication-aware training`) are not fully integrated.
+
+## References
+
+- **Original Architecture**: Lin, X., Rivenson, Y., Yardimci, N. T., Veli, M., Luo, Y., Jarrahi, M., & Ozcan, A. (2018). All-optical machine learning using diffractive deep neural networks. *Science*, 361(6406), 1004-1008. [10.1126/science.aat8084](https://doi.org/10.1126/science.aat8084)
+
+## License
+
+MIT License. See [LICENSE](LICENSE) for details.
