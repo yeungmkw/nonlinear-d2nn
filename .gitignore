@@ -8,16 +8,22 @@ __pycache__/
 .codex/
 .codex_tmp/
 .claude/
+
+# AI agent configuration files (local only)
 AGENTS.md
 CLAUDE.md
+
+# Local development scripts and notes
 fix_path.ps1
 python_paths.txt
-%SystemDrive%/
-docs/superpowers/
 
+# Large binary artifacts (distributed via GitHub Releases)
 data/
 checkpoints/
 exports/
+
+# Generated figures are gitignored by default; selected representative figures
+# are committed explicitly and tracked via git add -f
 figures/
 
 *.log
