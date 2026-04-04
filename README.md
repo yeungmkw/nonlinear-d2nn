@@ -74,7 +74,7 @@ Configuration: same activation and placement, 20 epochs, three seeds.
 
 ## Released Checkpoints
 
-Trained weights and large experiment artifacts are distributed via [GitHub Releases](../../releases) rather than committed directly to the repository to keep clone size small.
+Trained weights and large experiment artifacts are distributed via [GitHub Releases](https://github.com/yeungmkw/nonlinear-d2nn/releases) rather than committed directly to the repository to keep clone size small.
 
 | Release tag | Contents |
 |---|---|
@@ -113,13 +113,9 @@ uv sync
 uv sync --dev
 ```
 
-> **CPU-only environment (CI / no GPU):** install PyTorch separately before `uv sync`:
-> ```bash
-> pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-> uv sync --dev --no-build-isolation
-> ```
+> **CPU-only environment (CI / no GPU):** use the CPU PyTorch wheel index instead of the CUDA-configured project default when creating the environment.
 
-> Some checkpoints and larger experiment artifacts are available from [GitHub Releases](../../releases) and are not included in the repository itself.
+> Some checkpoints and larger experiment artifacts are available from [GitHub Releases](https://github.com/yeungmkw/nonlinear-d2nn/releases) and are not included in the repository itself.
 
 ---
 
