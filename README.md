@@ -95,6 +95,3 @@ uv run python export_phase_plate.py --task classification \
 
 - **Original Architecture**: Lin, X., Rivenson, Y., Yardimci, N. T., Veli, M., Luo, Y., Jarrahi, M., & Ozcan, A. (2018). All-optical machine learning using diffractive deep neural networks. *Science*, 361(6406), 1004-1008. [10.1126/science.aat8084](https://doi.org/10.1126/science.aat8084)
 
-## License
-
-License terms have not been finalized in this repository yet.
