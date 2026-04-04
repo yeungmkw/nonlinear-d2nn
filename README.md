@@ -4,6 +4,12 @@ A PyTorch-based reproduction and extension codebase for the Diffractive Deep Neu
 
 This repository focuses on numerical simulation, experiment management, and phase-plate export for D2NN classification and imaging tasks. In addition to the phase-only baseline, it includes configurable nonlinear field activations for mechanism and placement studies.
 
+## Current Status
+
+- The phase-only reproduction baseline is in place for classification and imaging workflows.
+- The current nonlinear line in this repository centers on `incoherent_intensity + back` as the strongest activation / placement combination found so far.
+- Nonlinear transfer experiments have already been run on Fashion-MNIST, grayscale CIFAR-10, and RGB CIFAR-10.
+
 ## Features
 
 - **Phase-only Forward Propagation**: Numerical simulation of free-space angular spectrum propagation with phase-only modulation.
@@ -93,5 +99,8 @@ uv run python export_phase_plate.py --task classification \
 
 ## References
 
-- **Original Architecture**: Lin, X., Rivenson, Y., Yardimci, N. T., Veli, M., Luo, Y., Jarrahi, M., & Ozcan, A. (2018). All-optical machine learning using diffractive deep neural networks. *Science*, 361(6406), 1004-1008. [10.1126/science.aat8084](https://doi.org/10.1126/science.aat8084)
+- **Core paper**: Lin, X., Rivenson, Y., Yardimci, N. T., Veli, M., Luo, Y., Jarrahi, M., & Ozcan, A. (2018). All-optical machine learning using diffractive deep neural networks. *Science*, 361(6406), 1004-1008. [10.1126/science.aat8084](https://doi.org/10.1126/science.aat8084)
+- **Nonlinear follow-up**: Yan, T., Yang, J., Zheng, Z., et al. Multilayer nonlinear diffraction neural networks with programmable and fast ReLU activation function. *Nature Communications* (2025). [Article](https://www.nature.com/articles/s41467-025-65275-0)
+- **Nonlinear follow-up**: Wetzstein, G., et al. Reprogrammable Electro-Optic Nonlinear Activation Functions for Optical Neural Networks (2019). [arXiv:1903.04579](https://arxiv.org/abs/1903.04579)
+- **Nonlinear follow-up**: Wang, R., et al. A surface-normal photodetector as nonlinear activation function in diffractive optical neural networks (2023). [arXiv:2305.03627](https://arxiv.org/abs/2305.03627)
 
