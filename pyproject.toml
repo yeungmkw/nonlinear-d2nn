@@ -11,7 +11,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["ipykernel"]
+notebook = ["ipykernel"]
 
 [tool.uv.sources]
 torch = { index = "pytorch-cuda" }
@@ -21,3 +21,8 @@ torchvision = { index = "pytorch-cuda" }
 name = "pytorch-cuda"
 url = "https://download.pytorch.org/whl/cu126"
 explicit = true
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]
