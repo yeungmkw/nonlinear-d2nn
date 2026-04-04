@@ -51,10 +51,16 @@ from visualize import build_parser as build_visualize_parser
 
 
 class D2NNCoreTests(unittest.TestCase):
-    def test_readme_has_deliverable_sections(self):
+    def test_readme_has_public_repo_sections(self):
         readme = Path(__file__).resolve().parents[1] / "README.md"
         content = readme.read_text(encoding="utf-8")
-        for section in ("## 推荐复现路径", "## 推荐 checkpoint", "## 论文对照结果"):
+        for section in (
+            "## Features",
+            "## Quick Start",
+            "## Project Structure",
+            "## Known Limitations & Scope",
+            "## References",
+        ):
             self.assertIn(section, content)
 
     def test_cli_entrypoints_expose_help(self):
