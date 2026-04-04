@@ -29,13 +29,13 @@ After reproducing the three main-text tasks (MNIST, Fashion-MNIST and the imagin
 
 | Task | Paper | This repo | Training |
 |------|-------|---------|---------|
-| MNIST classification | 97.61 % | **97.63 %** | 20 epochs, 5 layers, 200×200 px/layer |
-| Fashion-MNIST classification | 81.13 % | **87.49 %** | 20 epochs, 5 layers, 200×200 px/layer |
-| Imaging lens (D2NNImager) | qualitative | Test MSE = 0.0259 | 10 epochs on STL10, 5 layers |
+| [MNIST](http://yann.lecun.com/exdb/mnist/) classification | 97.61 % | **97.63 %** | 20 epochs, 5 layers, 200×200 px/layer |
+| [Fashion-MNIST](https://github.com/zalandoresearch/fashion-mnist) classification | 81.13 % | **87.49 %** | 20 epochs, 5 layers, 200×200 px/layer |
+| Imaging lens (D2NNImager) | qualitative | Test MSE = 0.0259 | 10 epochs on [STL10](https://cs.stanford.edu/~acoates/stl10/), 5 layers |
 
-> The imaging lens in this repo uses STL10 natural images rather than the paper's original terahertz beams; the propagation physics model is identical.
+> The imaging lens in this repo uses [STL10](https://cs.stanford.edu/~acoates/stl10/) natural images rather than the paper's original terahertz beams; the propagation physics model is identical.
 
-### Nonlinear Extension — Fashion-MNIST
+### Nonlinear Extension — [Fashion-MNIST](https://github.com/zalandoresearch/fashion-mnist)
 
 Configuration: `incoherent_intensity` activation, `back` placement, 5-layer phase-only base, 20 epochs, seed 42.
 
@@ -46,7 +46,7 @@ Configuration: `incoherent_intensity` activation, `back` placement, 5-layer phas
 | + Nonlinear (back, 20 ep, seed 7) | 87.36 % |
 | + Nonlinear (back, 20 ep, seed 123) | 87.28 % |
 
-### Nonlinear Extension — Grayscale CIFAR-10
+### Nonlinear Extension — Grayscale [CIFAR-10](https://www.cs.toronto.edu/~kriz/cifar.html)
 
 Configuration: same activation and placement, 10 epochs, two seeds.
 
@@ -55,7 +55,7 @@ Configuration: same activation and placement, 10 epochs, two seeds.
 | Phase-only baseline | 35.09 % | 35.10 % |
 | + Nonlinear (incoherent, back) | **39.48 %** (+4.4 pt) | **39.88 %** (+4.8 pt) |
 
-### Nonlinear Extension — RGB CIFAR-10
+### Nonlinear Extension — RGB [CIFAR-10](https://www.cs.toronto.edu/~kriz/cifar.html)
 
 Configuration: same activation and placement, 20 epochs, three seeds.
 
