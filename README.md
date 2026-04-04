@@ -3,10 +3,23 @@
 A PyTorch-based reproduction and extension of the Diffractive Deep Neural Network (D2NN) introduced by [Lin et al., *Science* 2018](https://doi.org/10.1126/science.aat8084).
 
 **What is D2NN?**  
-A D2NN is an all-optical computing system where information is processed entirely through diffractive layers — each layer modulates the phase (and optionally the amplitude) of an incoming optical field, and free-space propagation between layers plays the role of a nonlinear mixing operation. Lin et al. demonstrated that such a system, trained end-to-end via back-propagation on a simulated wave-optics model, can classify handwritten digits and act as an imaging lens at terahertz frequencies.
+A D2NN is an all-optical computing system where information is processed entirely through diffractive layers. Each layer modulates the phase (and optionally the amplitude) of an incoming optical field; free-space propagation between layers is a *linear* operation governed by the Angular Spectrum Method (ASM). Classification or imaging capability emerges from the combination of trainable phase patterns and linear wave mixing across multiple layers, making the system end-to-end differentiable via back-propagation. Lin et al. demonstrated that such a system can classify handwritten digits and act as an imaging lens at terahertz frequencies.
 
 **What this repository adds beyond the paper:**  
 After reproducing the three main-text tasks (MNIST, Fashion-MNIST and the imaging lens), this repository systematically studies *intensity-dependent nonlinear field activations* inserted between diffractive layers — exploring three activation mechanisms (coherent amplitude gate, coherent phase shift, incoherent intensity detector) across four placement strategies (front, mid, back, all layers). The strongest configuration found so far (`incoherent_intensity + back`) is then evaluated on Fashion-MNIST, grayscale CIFAR-10 and RGB CIFAR-10 to assess cross-dataset transfer.
+
+---
+
+## Features
+
+- **Phase-only Forward Propagation**: Numerical simulation of free-space angular spectrum propagation (Angular Spectrum Method) with phase-only modulation.
+- **Task Support**:
+  - Image classification on MNIST, Fashion-MNIST, CIFAR-10 (grayscale and RGB)
+  - Imaging experiments on STL10 or custom `imagefolder` datasets
+- **Nonlinear Activation Extensions**: Configurable intensity-dependent activation mechanisms (`coherent_amplitude`, `coherent_phase`, `incoherent_intensity`) with placement ablations (`front`, `mid`, `back`, `all`).
+- **Experiment Grid Runner**: `--print-experiment-grid` and `--run-experiment-grid` flags for systematic mechanism and placement sweeps.
+- **Physical Export Toolchain**: Converts trained phase masks into thickness / height-map representations and optional STL exports for fabrication-oriented workflows.
+- **Reproducibility Tooling**: Seed control, `--run-name` artifact isolation, and JSON manifests recording all hyperparameters alongside each checkpoint.
 
 ---
 
@@ -93,12 +106,18 @@ Clone and install:
 git clone https://github.com/yeungmkw/nonlinear-d2nn.git
 cd nonlinear-d2nn
 
-# Install runtime + dev dependencies (CPU-only PyTorch for testing)
-uv sync --dev
+# GPU training (default): installs PyTorch from the CUDA 12.6 index
+uv sync
 
-# For GPU training, install the CUDA variant instead:
-uv sync                  # uses pyproject.toml index pointing to cu126 wheels
+# To install dev/test dependencies as well:
+uv sync --dev
 ```
+
+> **CPU-only environment (CI / no GPU):** install PyTorch separately before `uv sync`:
+> ```bash
+> pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+> uv sync --dev --no-build-isolation
+> ```
 
 > Some checkpoints and larger experiment artifacts are available from [GitHub Releases](../../releases) and are not included in the repository itself.
 
