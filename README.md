@@ -1,4 +1,4 @@
-# nonlinear-d2nn
+# Nonlinear-d2nn
 
 A PyTorch implementation of the Diffractive Deep Neural Network (D2NN) architecture, originally proposed by [Lin et al., *Science* 2018](https://doi.org/10.1126/science.aat8084). 
 
