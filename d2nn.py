@@ -11,9 +11,80 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+def field_intensity(u):
+    """Squared complex magnitude without stabilization bias."""
+    return u.real**2 + u.imag**2
+
+
 def safe_abs(u, eps=1e-8):
-    """Stable complex magnitude used by future nonlinear activations."""
-    return torch.sqrt(u.real**2 + u.imag**2 + eps)
+    """Stable complex magnitude used when amplitude is required."""
+    return torch.sqrt(field_intensity(u) + eps)
+
+
+def padded_grid_size(size):
+    """Use a doubled simulation grid to approximate linear convolution."""
+    return 2 * size
+
+
+def build_transfer_function(size, wavelength, layer_distance, pixel_size):
+    """Build a batched ASM transfer function on the requested simulation grid."""
+    fx = torch.fft.fftfreq(size, d=pixel_size)
+    fy = torch.fft.fftfreq(size, d=pixel_size)
+    FX, FY = torch.meshgrid(fx, fy, indexing="ij")
+
+    sq = (1.0 / wavelength) ** 2 - FX**2 - FY**2
+    propagating = sq > 0
+    kz = torch.sqrt(torch.clamp(sq, min=0))
+    return (torch.exp(1j * 2 * np.pi * kz * layer_distance) * propagating).unsqueeze(0)
+
+
+def _pad_complex_field(u, target_size):
+    """Zero-pad the last two spatial dimensions to the requested square size."""
+    current_size = u.shape[-1]
+    if current_size == target_size:
+        return u
+    if current_size > target_size:
+        raise ValueError(f"Cannot pad from size {current_size} down to smaller target size {target_size}")
+
+    pad_total = target_size - current_size
+    pad_before = pad_total // 2
+    pad_after = pad_total - pad_before
+
+    padded = torch.zeros(*u.shape[:-2], target_size, target_size, dtype=u.dtype, device=u.device)
+    padded[..., pad_before : target_size - pad_after, pad_before : target_size - pad_after] = u
+    return padded
+
+
+def _crop_center(u, target_size):
+    """Crop the centered square window from the last two spatial dimensions."""
+    current_size = u.shape[-1]
+    if current_size == target_size:
+        return u
+    if current_size < target_size:
+        raise ValueError(f"Cannot crop from size {current_size} up to larger target size {target_size}")
+
+    start = (current_size - target_size) // 2
+    end = start + target_size
+    return u[..., start:end, start:end]
+
+
+def propagate_with_transfer(u, transfer_function):
+    """Propagate on the padded grid and crop back to the original field size."""
+    if transfer_function.ndim == 2:
+        transfer_function = transfer_function.unsqueeze(0)
+
+    padded = _pad_complex_field(u, transfer_function.shape[-1])
+    spectrum = torch.fft.fft2(padded)
+    propagated = torch.fft.ifft2(spectrum * transfer_function)
+    return _crop_center(propagated, u.shape[-1])
+
+
+def _discard_state_dict_key_compatibility(missing_keys, unexpected_keys, key):
+    """Ignore deterministic buffers that are regenerated from model config."""
+    while key in missing_keys:
+        missing_keys.remove(key)
+    while key in unexpected_keys:
+        unexpected_keys.remove(key)
 
 
 def embed_amplitude_image(x, size, target_size=None):
@@ -91,9 +162,7 @@ def propagate_output_field(u, layers, transfer_function, activations=None):
             if key in activations:
                 u = activations[key](u)
 
-    spectrum = torch.fft.fft2(u)
-    spectrum = spectrum * transfer_function.unsqueeze(0)
-    return torch.fft.ifft2(spectrum)
+    return propagate_with_transfer(u, transfer_function)
 
 
 class FieldActivationBase(nn.Module):
@@ -130,7 +199,7 @@ class CoherentAmplitudeActivation(FieldActivationBase):
         self.gain_max = float(gain_max)
 
     def forward(self, u):
-        intensity = safe_abs(u) ** 2
+        intensity = field_intensity(u)
         gate = torch.sigmoid((intensity - self.threshold) / self.temperature)
         gain = self.gain_min + (self.gain_max - self.gain_min) * gate
         self.last_stats = {
@@ -150,7 +219,7 @@ class CoherentPhaseActivation(FieldActivationBase):
         self.gamma = float(gamma)
 
     def forward(self, u):
-        intensity = safe_abs(u) ** 2
+        intensity = field_intensity(u)
         phase_shift = self.gamma * intensity
         self.last_stats = {
             "mean_intensity": float(intensity.mean().detach().cpu()),
@@ -176,7 +245,7 @@ class IncoherentIntensityActivation(FieldActivationBase):
         self.emission_phase_mode = emission_phase_mode
 
     def forward(self, u):
-        intensity = safe_abs(u) ** 2
+        intensity = field_intensity(u)
         emitted_amplitude = torch.relu(self.responsivity * intensity - self.threshold)
         self.last_stats = {
             "mean_intensity": float(intensity.mean().detach().cpu()),
@@ -233,6 +302,7 @@ class DiffractiveLayer(nn.Module):
     def __init__(self, size, wavelength, layer_distance, pixel_size):
         super().__init__()
         self.size = size
+        self.padded_size = padded_grid_size(size)
         self.wavelength = wavelength
         self.layer_distance = layer_distance
         self.pixel_size = pixel_size
@@ -241,22 +311,18 @@ class DiffractiveLayer(nn.Module):
         self.register_buffer("H", self._build_transfer_function())
 
     def _build_transfer_function(self):
-        fx = torch.fft.fftfreq(self.size, d=self.pixel_size)
-        fy = torch.fft.fftfreq(self.size, d=self.pixel_size)
-        FX, FY = torch.meshgrid(fx, fy, indexing="ij")
+        return build_transfer_function(self.padded_size, self.wavelength, self.layer_distance, self.pixel_size)
 
-        sq = (1.0 / self.wavelength) ** 2 - FX**2 - FY**2
-        propagating = sq > 0
-        kz = torch.sqrt(torch.clamp(sq, min=0))
-        return torch.exp(1j * 2 * np.pi * kz * self.layer_distance) * propagating
+    def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
+        key = f"{prefix}H"
+        state_dict.pop(key, None)
+        super()._load_from_state_dict(state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs)
+        _discard_state_dict_key_compatibility(missing_keys, unexpected_keys, key)
 
     def forward(self, u):
         modulation = torch.exp(1j * self.phase)
         u = u * modulation.unsqueeze(0)
-
-        spectrum = torch.fft.fft2(u)
-        spectrum = spectrum * self.H.unsqueeze(0)
-        return torch.fft.ifft2(spectrum)
+        return propagate_with_transfer(u, self.H)
 
 
 class D2NNBase(nn.Module):
@@ -291,13 +357,13 @@ class D2NNBase(nn.Module):
 
     @staticmethod
     def _build_output_transfer(size, wavelength, layer_distance, pixel_size):
-        fx = torch.fft.fftfreq(size, d=pixel_size)
-        fy = torch.fft.fftfreq(size, d=pixel_size)
-        FX, FY = torch.meshgrid(fx, fy, indexing="ij")
-        sq = (1.0 / wavelength) ** 2 - FX**2 - FY**2
-        propagating = sq > 0
-        kz = torch.sqrt(torch.clamp(sq, min=0))
-        return torch.exp(1j * 2 * np.pi * kz * layer_distance) * propagating
+        return build_transfer_function(padded_grid_size(size), wavelength, layer_distance, pixel_size)
+
+    def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
+        key = f"{prefix}H_out"
+        state_dict.pop(key, None)
+        super()._load_from_state_dict(state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs)
+        _discard_state_dict_key_compatibility(missing_keys, unexpected_keys, key)
 
     def propagate_embedded_field(self, u):
         return propagate_output_field(u, self.layers, self.H_out, self.activations)
@@ -307,7 +373,7 @@ class D2NNBase(nn.Module):
 
     @staticmethod
     def output_intensity_from_field(field):
-        return torch.abs(field) ** 2
+        return field_intensity(field)
 
     def output_intensity(self, x):
         return self.output_intensity_from_field(self.propagate_field(x))
@@ -369,14 +435,21 @@ class D2NN(D2NNBase):
             angle = 2 * np.pi * i / num_classes - np.pi / 2
             cx = int(center + radius * np.cos(angle))
             cy = int(center + radius * np.sin(angle))
-            half = detector_size // 2
-            x_start = max(cx - half, 0)
-            x_end = min(cx + half + 1, size)
-            y_start = max(cy - half, 0)
-            y_end = min(cy + half + 1, size)
+            half_low = detector_size // 2
+            half_high = detector_size - half_low
+            x_start = max(cx - half_low, 0)
+            x_end = min(cx + half_high, size)
+            y_start = max(cy - half_low, 0)
+            y_end = min(cy + half_high, size)
             masks[i, x_start:x_end, y_start:y_end] = 1.0
 
         return masks
+
+    def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
+        key = f"{prefix}detector_masks"
+        state_dict.pop(key, None)
+        super()._load_from_state_dict(state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs)
+        _discard_state_dict_key_compatibility(missing_keys, unexpected_keys, key)
 
     def forward(self, x):
         return self.detect_from_intensity(self.output_intensity(x))

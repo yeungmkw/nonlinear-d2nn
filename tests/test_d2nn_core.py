@@ -32,6 +32,7 @@ from d2nn import (
     D2NNImager,
     IdentityActivation,
     IncoherentIntensityActivation,
+    field_intensity,
     phase_to_height_map,
     safe_abs,
 )
@@ -136,6 +137,20 @@ class D2NNCoreTests(unittest.TestCase):
         self.assertEqual(model.detector_masks.shape, (10, 32, 32))
         self.assertTrue(torch.all(model.detector_masks.sum(dim=(-2, -1)) > 0))
 
+    def test_diffractive_layer_uses_padded_transfer_grids(self):
+        model = D2NN(**CLASSIFIER_PAPER_OPTICS.with_overrides(size=24, num_layers=2).classifier_model_kwargs())
+        self.assertEqual(model.layers[0].H.shape, (1, 48, 48))
+        self.assertEqual(model.H_out.shape, (1, 48, 48))
+
+    def test_classifier_even_detector_size_is_respected(self):
+        detector_size = 4
+        masks = D2NN._build_detectors(size=32, num_classes=1, detector_size=detector_size)
+        active = torch.where(masks[0] > 0)
+        width = int(active[0].max() - active[0].min() + 1)
+        height = int(active[1].max() - active[1].min() + 1)
+        self.assertEqual(width, detector_size)
+        self.assertEqual(height, detector_size)
+
     def test_phase_export_is_wrapped(self):
         model = D2NN(**CLASSIFIER_PAPER_OPTICS.with_overrides(size=16, num_layers=3).classifier_model_kwargs())
         phase_masks = model.export_phase_masks(wrap=True)
@@ -216,6 +231,12 @@ class D2NNCoreTests(unittest.TestCase):
         magnitude = safe_abs(x)
         self.assertEqual(magnitude.shape, (2, 3))
         self.assertTrue(torch.all(magnitude > 0))
+
+    def test_field_intensity_matches_squared_magnitude_without_eps_bias(self):
+        x = torch.tensor([[3.0 + 4.0j, 0.0 + 1.0j]], dtype=torch.cfloat)
+        intensity = field_intensity(x)
+        expected = torch.tensor([[25.0, 1.0]])
+        self.assertTrue(torch.equal(intensity, expected))
 
     def test_identity_activation_preserves_complex_field(self):
         activation = IdentityActivation()
@@ -321,6 +342,24 @@ class D2NNCoreTests(unittest.TestCase):
         self.assertEqual(restored(x).shape, (2, 10))
         self.assertEqual(restored(x).dtype, torch.float32)
         self.assertTrue(torch.allclose(restored(x), original(x), atol=1e-6, rtol=1e-5))
+
+    def test_checkpoint_load_ignores_stale_transfer_buffers_and_detector_masks(self):
+        optics = CLASSIFIER_PAPER_OPTICS.with_overrides(size=24, num_layers=2)
+        model = D2NN(**optics.classifier_model_kwargs())
+        restored = D2NN(**optics.classifier_model_kwargs())
+        state_dict = model.state_dict()
+        state_dict["layers.0.H"] = torch.zeros(24, 24, dtype=torch.cfloat)
+        state_dict["layers.1.H"] = torch.zeros(24, 24, dtype=torch.cfloat)
+        state_dict["H_out"] = torch.zeros(24, 24, dtype=torch.cfloat)
+        state_dict["detector_masks"] = torch.zeros_like(state_dict["detector_masks"])
+
+        restored.load_state_dict(state_dict, strict=True)
+
+        self.assertTrue(torch.equal(restored.detector_masks, restored._build_detectors(24, 10, None)))
+        self.assertEqual(restored.layers[0].H.shape, (1, 48, 48))
+        self.assertEqual(restored.H_out.shape, (1, 48, 48))
+        x = torch.rand(2, 1, 28, 28)
+        self.assertEqual(restored(x).shape, (2, 10))
 
     def test_identity_activation_supports_backward_pass(self):
         optics = CLASSIFIER_PAPER_OPTICS.with_overrides(size=24, num_layers=2)
