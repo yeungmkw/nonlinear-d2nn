@@ -13,6 +13,7 @@ from artifacts import (
     CLASSIFIER_PAPER_OPTICS,
     IMAGER_PAPER_OPTICS,
     apply_manufacturing_profile,
+    build_fabrication_readiness_summary,
     build_layer_stats,
     checkpoint_manifest_path,
     derive_experiment_run_name,
@@ -24,6 +25,7 @@ from artifacts import (
     read_manifest,
     resolve_optics,
     save_manifest,
+    write_export_report,
 )
 from d2nn import (
     CoherentAmplitudeActivation,
@@ -1115,6 +1117,73 @@ class D2NNCoreTests(unittest.TestCase):
         self.assertAlmostEqual(float(relief.max()), 6e-6)
         self.assertAlmostEqual(float(thickness.min()), 5e-6)
         self.assertAlmostEqual(float(thickness.max()), 11e-6)
+
+    def test_build_fabrication_readiness_summary_reports_clipping(self):
+        raw_height_map = torch.tensor([[[0.0, 2e-6], [5e-6, 8e-6]]]).numpy()
+        manufacturable_relief = torch.tensor([[[0.0, 2e-6], [5e-6, 6e-6]]]).numpy()
+        thickness_map = manufacturable_relief + 1e-5
+
+        summary = build_fabrication_readiness_summary(
+            raw_height_map,
+            manufacturable_relief,
+            thickness_map,
+            max_relief_m=6e-6,
+            pixel_size_m=1e-6,
+        )
+
+        self.assertTrue(summary["has_relief_limit"])
+        self.assertAlmostEqual(summary["max_relief_m"], 6e-6)
+        self.assertAlmostEqual(summary["raw_height_max_m"], 8e-6)
+        self.assertAlmostEqual(summary["manufacturable_height_max_m"], 6e-6)
+        self.assertEqual(summary["clipped_pixels"], 1)
+        self.assertEqual(summary["total_pixels"], 4)
+        self.assertAlmostEqual(summary["clipped_fraction"], 0.25)
+        self.assertAlmostEqual(summary["pixel_size_m"], 1e-6)
+
+    def test_write_export_report_includes_fabrication_readiness_section(self):
+        layer_stats = [
+            {
+                "layer": 1,
+                "phase_min_rad": 0.0,
+                "phase_max_rad": 1.0,
+                "height_min_m": 0.0,
+                "height_max_m": 1e-6,
+                "height_mean_m": 0.5e-6,
+                "thickness_min_m": 1e-5,
+                "thickness_max_m": 1.1e-5,
+                "thickness_mean_m": 1.05e-5,
+            }
+        ]
+        readiness = {
+            "has_relief_limit": True,
+            "max_relief_m": 6e-6,
+            "raw_height_max_m": 8e-6,
+            "manufacturable_height_max_m": 6e-6,
+            "clipped_fraction": 0.25,
+            "clipped_pixels": 1,
+            "total_pixels": 4,
+            "pixel_size_m": 1e-6,
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            report_path = Path(tmpdir) / "report.md"
+            write_export_report(
+                report_path,
+                checkpoint_name="demo.pth",
+                task="classification",
+                num_layers=1,
+                size=4,
+                pixel_size_um=0.4,
+                wavelength_um=0.75,
+                quantization_levels=256,
+                layer_stats=layer_stats,
+                fabrication_readiness=readiness,
+            )
+            content = report_path.read_text(encoding="utf-8")
+
+        self.assertIn("## Fabrication Readiness", content)
+        self.assertIn("clipped fraction", content)
+        self.assertIn("demo.pth", content)
 
     def test_export_height_map_to_ascii_stl_writes_file(self):
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -20,6 +20,7 @@ from artifacts import (
     CLASSIFIER_PAPER_OPTICS,
     IMAGER_PAPER_OPTICS,
     apply_manufacturing_profile,
+    build_fabrication_readiness_summary,
     build_layer_stats,
     build_model_for_task,
     export_height_map_to_ascii_stl,
@@ -113,6 +114,13 @@ def main():
             )
 
     layer_stats = build_layer_stats(phase_masks, manufacturable_relief, thickness_map)
+    fabrication_readiness = build_fabrication_readiness_summary(
+        raw_height_map,
+        manufacturable_relief,
+        thickness_map,
+        max_relief_m=None if args.max_relief_um is None else args.max_relief_um * 1e-6,
+        pixel_size_m=optics.pixel_size,
+    )
     write_export_report(
         export_root / "report.md",
         checkpoint_name=checkpoint_path.name,
@@ -123,6 +131,7 @@ def main():
         wavelength_um=optics.wavelength * 1e6,
         quantization_levels=args.quantization_levels,
         layer_stats=layer_stats,
+        fabrication_readiness=fabrication_readiness,
     )
 
     save_manifest(
@@ -148,6 +157,7 @@ def main():
             },
             "quantization_levels": args.quantization_levels,
             "layer_stats": layer_stats,
+            "fabrication_readiness": fabrication_readiness,
             "notes": "height_map assumes transmissive phase-only plates with wrapped phase in [0, 2pi).",
         },
     )

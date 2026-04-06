@@ -306,6 +306,34 @@ def apply_manufacturing_profile(
     return manufacturable_relief, thickness_map
 
 
+def build_fabrication_readiness_summary(
+    raw_height_map: np.ndarray,
+    manufacturable_relief: np.ndarray,
+    thickness_map: np.ndarray,
+    *,
+    max_relief_m: float | None,
+    pixel_size_m: float,
+) -> dict[str, Any]:
+    raw_height_map = np.asarray(raw_height_map)
+    manufacturable_relief = np.asarray(manufacturable_relief)
+    thickness_map = np.asarray(thickness_map)
+    clipped = np.abs(raw_height_map - manufacturable_relief) > 1e-12
+    total_pixels = int(raw_height_map.size)
+    clipped_pixels = int(np.count_nonzero(clipped))
+
+    return {
+        "has_relief_limit": max_relief_m is not None,
+        "max_relief_m": None if max_relief_m is None else float(max_relief_m),
+        "raw_height_max_m": float(raw_height_map.max()) if raw_height_map.size else 0.0,
+        "manufacturable_height_max_m": float(manufacturable_relief.max()) if manufacturable_relief.size else 0.0,
+        "thickness_max_m": float(thickness_map.max()) if thickness_map.size else 0.0,
+        "clipped_fraction": float(clipped_pixels / total_pixels) if total_pixels else 0.0,
+        "clipped_pixels": clipped_pixels,
+        "total_pixels": total_pixels,
+        "pixel_size_m": float(pixel_size_m),
+    }
+
+
 def quantize_height_map(height_map: np.ndarray, levels: int) -> np.ndarray:
     if levels < 2:
         raise ValueError("levels must be at least 2")
@@ -384,6 +412,7 @@ def write_export_report(
     wavelength_um: float,
     quantization_levels: int,
     layer_stats: list[dict],
+    fabrication_readiness: dict[str, Any] | None = None,
 ) -> None:
     lines = [
         "# Phase Plate Export Report",
@@ -412,6 +441,32 @@ def write_export_report(
                 height_max=item["height_max_m"] * 1e6,
                 height_mean=item["height_mean_m"] * 1e6,
             )
+        )
+
+    if fabrication_readiness is not None:
+        has_relief_limit = fabrication_readiness["has_relief_limit"]
+        max_relief_m = fabrication_readiness["max_relief_m"]
+        raw_height_max_m = fabrication_readiness["raw_height_max_m"]
+        manufacturable_height_max_m = fabrication_readiness["manufacturable_height_max_m"]
+        thickness_max_m = fabrication_readiness.get("thickness_max_m")
+        clipped_pixels = fabrication_readiness["clipped_pixels"]
+        total_pixels = fabrication_readiness["total_pixels"]
+        clipped_fraction = fabrication_readiness["clipped_fraction"]
+        pixel_size_m = fabrication_readiness["pixel_size_m"]
+        lines.extend(
+            [
+                "",
+                "## Fabrication Readiness",
+                "",
+                f"- relief limit enabled: `{str(has_relief_limit).lower()}`",
+                f"- max relief: `{('none' if max_relief_m is None else f'{max_relief_m * 1e6:.3f} um')}`",
+                f"- raw height max: `{raw_height_max_m * 1e6:.3f} um`",
+                f"- manufacturable height max: `{manufacturable_height_max_m * 1e6:.3f} um`",
+                f"- thickness max: `{thickness_max_m * 1e6:.3f} um`" if thickness_max_m is not None else "- thickness max: `n/a`",
+                f"- clipped pixels: `{clipped_pixels}` of `{total_pixels}`",
+                f"- clipped fraction: `{clipped_fraction:.2%}`",
+                f"- pixel size: `{pixel_size_m * 1e6:.3f} um`",
+            ]
         )
 
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
