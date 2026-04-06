@@ -63,3 +63,5 @@ If the fabricated output does not match the simulation trends, debug in this ord
 ## Notes
 
 This protocol is now backed by a regenerated `fabrication_baseline` checkpoint, saved understanding-report figures, and a complete export dry-run. The next fabrication handoff should preserve this optical mapping while replacing the dry-run material/process assumptions with lab-confirmed values.
+
+For the lab-facing parameter checklist, final export template, and first-session checklist, use `docs/fabrication/fashion-mnist-phase-only-lab-handoff.md`.
