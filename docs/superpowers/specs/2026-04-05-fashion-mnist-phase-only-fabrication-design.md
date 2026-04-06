@@ -7,6 +7,19 @@
 **Intended fabrication target:** retrained physics-aligned baseline after Commit `94bb34b`  
 **Related baseline note:** `docs/baselines/fashion-mnist-phase-only-5layer-baseline.md`
 
+## Advisor Intent Anchor
+
+The work in this spec should stay anchored to the advisor's stated purpose:
+
+> "你现在这个非线性其实是处理相对光强的，现在主要是想让你练的时候理解网络这部分，把训练的相位保存下来，后面加工出来，然后放到光路里测一下。"
+
+This quote is the controlling intent for the current phase. In practice, it means:
+
+- the nonlinear line is still useful, but mainly as context and comparison,
+- the immediate priority is understanding what the network learned,
+- the training result must be preserved as fabrication-ready phase data,
+- the near-term destination is a real optical measurement loop, not another open-ended numerical search.
+
 ## Goal
 
 Turn the completed nonlinear-validation stage into a fabrication-oriented execution path that keeps the nonlinear line scientifically relevant while making the first real optical experiment easier to interpret and debug.
