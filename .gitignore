@@ -9,6 +9,7 @@ __pycache__/
 .codex/
 .codex_tmp/
 .claude/
+.worktrees/
 
 # AI agent configuration files (local only)
 AGENTS.md
