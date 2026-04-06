@@ -318,6 +318,17 @@ def quantize_height_map(height_map: np.ndarray, levels: int) -> np.ndarray:
     return np.rint(normalized * (levels - 1)).astype(np.uint16)
 
 
+def quantize_phase_masks_uniform(phase_masks, levels: int):
+    if levels < 2:
+        raise ValueError("levels must be at least 2")
+
+    phase_masks = torch.as_tensor(phase_masks)
+    wrapped = torch.remainder(phase_masks, 2 * np.pi)
+    step = (2 * np.pi) / levels
+    quantized = torch.round(wrapped / step) * step
+    return torch.remainder(quantized, 2 * np.pi)
+
+
 def build_layer_stats(
     phase_masks: np.ndarray,
     relief_map: np.ndarray,

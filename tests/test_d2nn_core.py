@@ -45,6 +45,8 @@ from tasks import (
     execute_experiment_grid,
     format_experiment_grid_commands,
     get_classification_dataset_config,
+    plot_quantization_sensitivity,
+    plot_sample_output_patterns,
     resolve_activation_config,
     resolve_experiment_seed,
 )
@@ -588,9 +590,121 @@ class D2NNCoreTests(unittest.TestCase):
         args = build_visualize_parser().parse_args(["--checkpoint", "checkpoints/demo.pth", "--seed", "11"])
         self.assertEqual(args.seed, 11)
 
+    def test_visualize_parser_understanding_report_flags(self):
+        args = build_visualize_parser().parse_args(
+            [
+                "--checkpoint",
+                "checkpoints/demo.pth",
+                "--understanding-report",
+                "--sample-indices",
+                "4,5,6",
+                "--quantization-levels",
+                "4,8",
+            ]
+        )
+        self.assertTrue(args.understanding_report)
+        self.assertEqual(args.sample_indices, "4,5,6")
+        self.assertEqual(args.quantization_levels, "4,8")
+
     def test_visualize_parser_help_mentions_cifar10_rgb(self):
         help_text = build_visualize_parser().format_help()
         self.assertIn("cifar10-rgb", help_text)
+
+    def test_quantize_phase_masks_uniform_preserves_wrapped_range(self):
+        import artifacts
+
+        phase_masks = torch.tensor(
+            [
+                [[-0.2, 0.0], [math.pi, 2 * math.pi + 0.2]],
+                [[-4 * math.pi, 3 * math.pi / 2], [5 * math.pi, 7 * math.pi / 2]],
+            ],
+            dtype=torch.float32,
+        )
+
+        quantized = artifacts.quantize_phase_masks_uniform(phase_masks, levels=8)
+
+        self.assertEqual(quantized.shape, phase_masks.shape)
+        self.assertTrue(torch.all(quantized >= 0))
+        self.assertTrue(torch.all(quantized < 2 * math.pi + 1e-6))
+
+    def test_plot_sample_output_patterns_writes_understanding_report_figure(self):
+        from torch.utils.data import TensorDataset
+
+        model = D2NN(**CLASSIFIER_PAPER_OPTICS.with_overrides(size=16, num_layers=2).classifier_model_kwargs())
+        dataset = TensorDataset(
+            torch.rand(3, 1, 28, 28),
+            torch.tensor([0, 1, 2]),
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            save_path = Path(tmpdir) / "sample_output_patterns.png"
+            plot_sample_output_patterns(model, dataset, torch.device("cpu"), [0, 2], save_path=save_path, no_show=True)
+            self.assertTrue(save_path.exists())
+
+    def test_plot_quantization_sensitivity_restores_model_phases(self):
+        from torch.utils.data import DataLoader, TensorDataset
+
+        model = D2NN(**CLASSIFIER_PAPER_OPTICS.with_overrides(size=16, num_layers=2).classifier_model_kwargs())
+        original_phases = [layer.phase.detach().clone() for layer in model.layers]
+        dataset = TensorDataset(
+            torch.rand(4, 1, 28, 28),
+            torch.tensor([0, 1, 2, 3]),
+        )
+        loader = DataLoader(dataset, batch_size=2, shuffle=False)
+        manifest = {"run_name": "demo"}
+        dataset_cfg = {"display_name": "Demo"}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            save_path = Path(tmpdir) / "quantization_sensitivity.png"
+            plot_quantization_sensitivity(
+                model,
+                CLASSIFIER_PAPER_OPTICS.with_overrides(size=16, num_layers=2),
+                manifest,
+                loader,
+                dataset_cfg,
+                torch.device("cpu"),
+                [4, 8],
+                save_path=save_path,
+                no_show=True,
+            )
+            self.assertTrue(save_path.exists())
+
+        for layer, original in zip(model.layers, original_phases):
+            self.assertTrue(torch.allclose(layer.phase.detach(), original))
+
+    def test_plot_quantization_sensitivity_restores_model_phases_on_failure(self):
+        from torch.utils.data import DataLoader, TensorDataset
+
+        tasks_module = importlib.import_module("tasks")
+        model = D2NN(**CLASSIFIER_PAPER_OPTICS.with_overrides(size=16, num_layers=2).classifier_model_kwargs())
+        original_phases = [layer.phase.detach().clone() for layer in model.layers]
+        dataset = TensorDataset(
+            torch.rand(4, 1, 28, 28),
+            torch.tensor([0, 1, 2, 3]),
+        )
+        loader = DataLoader(dataset, batch_size=2, shuffle=False)
+        manifest = {"run_name": "demo"}
+        dataset_cfg = {"display_name": "Demo"}
+
+        with unittest.mock.patch.object(
+            tasks_module,
+            "evaluate_classification",
+            side_effect=[(0.0, 50.0), RuntimeError("boom")],
+        ):
+            with self.assertRaisesRegex(RuntimeError, "boom"):
+                tasks_module.plot_quantization_sensitivity(
+                    model,
+                    CLASSIFIER_PAPER_OPTICS.with_overrides(size=16, num_layers=2),
+                    manifest,
+                    loader,
+                    dataset_cfg,
+                    torch.device("cpu"),
+                    [4, 8],
+                    no_show=True,
+                )
+
+        for layer, original in zip(model.layers, original_phases):
+            self.assertTrue(torch.allclose(layer.phase.detach(), original))
 
     def test_resolve_experiment_seed_prefers_explicit_seed_then_manifest_then_default(self):
         self.assertEqual(resolve_experiment_seed(11, {"seed": 7}), 11)

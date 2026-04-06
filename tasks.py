@@ -26,6 +26,7 @@ from artifacts import (
     load_checkpoint_state_dict,
     maybe_show,
     plot_phase_masks,
+    quantize_phase_masks_uniform,
     read_checkpoint_manifest,
     resolve_optics,
     save_manifest,
@@ -90,6 +91,10 @@ INCOHERENT_INTENSITY_PRESETS = {
 
 
 def parse_activation_positions(value):
+    return parse_int_sequence(value)
+
+
+def parse_int_sequence(value):
     if value in (None, "", ()):
         return ()
 
@@ -231,6 +236,128 @@ def format_activation_diagnostics(diagnostics):
         if summary:
             parts.append(f"L{position} " + ", ".join(summary))
     return " | ".join(parts)
+
+
+@torch.no_grad()
+def plot_sample_output_patterns(model, dataset, device, sample_indices, save_path=None, no_show=False):
+    sample_indices = parse_int_sequence(sample_indices)
+    if not sample_indices:
+        raise ValueError("sample_indices must not be empty")
+
+    model.eval()
+    samples = []
+    targets = []
+    for index in sample_indices:
+        sample, target = dataset[index]
+        samples.append(sample)
+        targets.append(target)
+
+    inputs = torch.stack(samples).to(device)
+    outputs = model.output_intensity(inputs).cpu()
+    class_names = getattr(dataset, "classes", None)
+
+    fig, axes = plt.subplots(len(sample_indices), 2, figsize=(8, 3 * len(sample_indices)), squeeze=False)
+    for row, (index, sample, target) in enumerate(zip(sample_indices, samples, targets)):
+        input_ax, output_ax = axes[row]
+        sample_cpu = sample.detach().cpu()
+        if sample_cpu.ndim == 3 and sample_cpu.shape[0] == 1:
+            input_ax.imshow(sample_cpu[0].numpy(), cmap="gray")
+        elif sample_cpu.ndim == 3 and sample_cpu.shape[0] in (3, 4):
+            input_ax.imshow(sample_cpu[:3].permute(1, 2, 0).clamp(0, 1).numpy())
+        else:
+            input_ax.imshow(sample_cpu.squeeze().numpy(), cmap="gray")
+
+        target_index = int(target) if not torch.is_tensor(target) else int(target.item())
+        target_label = class_names[target_index] if class_names and target_index < len(class_names) else str(target_index)
+        input_ax.set_title(f"Input {index} | {target_label}")
+        input_ax.axis("off")
+
+        output_ax.imshow(outputs[row].numpy(), cmap="magma")
+        output_ax.set_title("Output intensity")
+        output_ax.axis("off")
+
+    fig.suptitle("Sample Output Patterns", fontsize=14)
+    plt.tight_layout()
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches="tight")
+        print(f"Saved: {save_path}")
+    maybe_show(no_show)
+    plt.close(fig)
+
+
+@torch.no_grad()
+def plot_quantization_sensitivity(
+    model,
+    optics,
+    manifest,
+    test_loader,
+    dataset_cfg,
+    device,
+    levels,
+    save_path=None,
+    no_show=False,
+):
+    levels = parse_int_sequence(levels)
+    if not levels:
+        raise ValueError("levels must not be empty")
+
+    model.eval()
+    _baseline_loss, baseline_acc = evaluate_classification(model, test_loader, device)
+    original_phases = [layer.phase.detach().clone() for layer in model.layers]
+
+    results = [("baseline", baseline_acc)]
+    try:
+        for level in levels:
+            for layer, original in zip(model.layers, original_phases):
+                layer.phase.copy_(original)
+
+            quantized = quantize_phase_masks_uniform(model.export_phase_masks(wrap=True), level)
+            for layer, phase_mask in zip(model.layers, quantized):
+                layer.phase.copy_(phase_mask.to(device=layer.phase.device, dtype=layer.phase.dtype))
+
+            _, accuracy = evaluate_classification(model, test_loader, device)
+            results.append((str(level), accuracy))
+    finally:
+        for layer, original in zip(model.layers, original_phases):
+            layer.phase.copy_(original)
+
+    labels = [name for name, _ in results]
+    accuracies = [accuracy for _, accuracy in results]
+
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+    bars = ax.bar(range(len(labels)), accuracies, color=["#2b6cb0"] + ["#c084fc"] * (len(labels) - 1))
+    ax.set_xticks(range(len(labels)))
+    ax.set_xticklabels(labels)
+    ax.set_ylabel("Accuracy (%)")
+    ax.set_xlabel("Phase quantization")
+    ax.set_ylim(0, max(100.0, max(accuracies) * 1.15))
+    ax.axhline(baseline_acc, color="#2b6cb0", linestyle="--", linewidth=1, alpha=0.5)
+
+    for bar, accuracy in zip(bars, accuracies):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + 0.5,
+            f"{accuracy:.2f}%",
+            ha="center",
+            va="bottom",
+            fontsize=8,
+        )
+
+    title_bits = [dataset_cfg.get("display_name", "Classification")]
+    if manifest:
+        run_name = manifest.get("run_name")
+        if run_name:
+            title_bits.append(str(run_name))
+        seed = manifest.get("seed")
+        if seed is not None:
+            title_bits.append(f"seed={seed}")
+    ax.set_title("Quantization Sensitivity\n" + " | ".join(title_bits))
+    fig.tight_layout()
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches="tight")
+        print(f"Saved: {save_path}")
+    maybe_show(no_show)
+    plt.close(fig)
 
 
 def build_experiment_grid(grid_name, args):
@@ -642,6 +769,29 @@ def run_classification_visualization(args):
         save_path=out_dir / "confusion_matrix.png",
         no_show=args.no_show,
     )
+
+    if getattr(args, "understanding_report", False):
+        sample_indices = parse_int_sequence(args.sample_indices)
+        quantization_levels = parse_int_sequence(args.quantization_levels)
+        plot_sample_output_patterns(
+            model,
+            test_set,
+            device,
+            sample_indices,
+            save_path=out_dir / "sample_output_patterns.png",
+            no_show=args.no_show,
+        )
+        plot_quantization_sensitivity(
+            model,
+            optics,
+            manifest,
+            test_loader,
+            dataset_cfg,
+            device,
+            quantization_levels,
+            save_path=out_dir / "quantization_sensitivity.png",
+            no_show=args.no_show,
+        )
 
 
 def build_imaging_dataset(dataset_name, data_dir, image_root, transform, seed):
