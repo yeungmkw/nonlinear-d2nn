@@ -2,7 +2,9 @@
 
 **Status:** proposed  
 **Date:** 2026-04-05  
-**Primary baseline:** `checkpoints/best_fashion_mnist.baseline_5layer.pth`  
+**Primary task line:** `Fashion-MNIST phase-only 5-layer baseline`  
+**Current frozen reference:** `checkpoints/best_fashion_mnist.baseline_5layer.pth`  
+**Intended fabrication target:** retrained physics-aligned baseline after Commit `94bb34b`  
 **Related baseline note:** `docs/baselines/fashion-mnist-phase-only-5layer-baseline.md`
 
 ## Goal
@@ -32,13 +34,14 @@ That combination makes first-round failures hard to interpret. A `phase-only` ba
 
 ### Decision 1: Freeze the first fabrication target as Fashion-MNIST phase-only
 
-The first fabrication target is:
+The first fabrication task line is:
 
 - task: `classification`
 - dataset: `Fashion-MNIST`
 - model type: `phase-only`
 - layer count: `5`
-- checkpoint: `checkpoints/best_fashion_mnist.baseline_5layer.pth`
+- reference checkpoint: `checkpoints/best_fashion_mnist.baseline_5layer.pth`
+- fabrication checkpoint: to be regenerated on top of the fixed physical backbone introduced by Commit `94bb34b`
 
 This keeps the first physical target directly comparable to the nonlinear line while avoiding the need to physically implement the current layerwise nonlinear mechanism on day one.
 
@@ -95,7 +98,8 @@ Purpose: remove checkpoint ambiguity before any downstream work.
 
 Required output:
 
-- one canonical fabrication target based on `Fashion-MNIST phase-only`,
+- one canonical `Fashion-MNIST phase-only` fabrication line,
+- one regenerated physics-aligned checkpoint for that line,
 - one written note that explains why this target is chosen over the nonlinear best line.
 
 Primary source:
@@ -173,10 +177,10 @@ If these checks fail, the first adjustment target is fabrication/material config
 
 ## Data Flow
 
-1. Start from `Fashion-MNIST phase-only` frozen checkpoint.
+1. Start from the frozen `Fashion-MNIST phase-only` reference and retrain the physics-aligned baseline on top of Commit `94bb34b`.
 2. Produce interpretation-oriented visualizations for human understanding.
 3. Write the simulation-to-lightpath mapping note.
-4. Export the fabrication package using the existing phase export toolchain.
+4. Export the fabrication package from the regenerated checkpoint using the existing phase export toolchain.
 5. Evaluate fabrication readiness on the exported package.
 6. Use the resulting package and mapping note for first-round optical calibration.
 7. Only after physical propagation is credible, move on to classification closure and later nonlinear hardware comparison.
@@ -235,11 +239,14 @@ This design succeeds if it enables the team to do the following without reopenin
 4. run a first optical experiment whose failure modes are diagnosable,
 5. preserve a clean path back to the nonlinear line after calibration.
 
-## Immediate Next Step
+## Immediate Next Step (Execution Checklist)
 
-Write the implementation plan for:
+**Phase 1: Code & Baseline Alignment (Pre-Fabrication Params)**
+- [ ] 1. **Retrain Baseline:** Based on the fixed physical backbone (Commit 94bb34b, with Zero-padding ASM), retrain the `Fashion-MNIST phase-only` 5-layer baseline model.
+- [ ] 2. **Network Visuals:** Run `visualize.py` on the new model to generate phase distribution maps and confusion matrices, satisfying the `Network Understanding Output`.
+- [ ] 3. **Export Dry-Run:** Run `export_phase_plate.py --export-stl` using the new checkpoint to verify that the generation path for Numpy, CSV, and STL files is clear.
+- [ ] 4. **Mapping Note Draft:** Write the "Simulation-to-Lightpath Mapping Protocol," pre-defining input loading methods, layer spacing mapping, and measurement normalization standards for physical experiments.
 
-- generating the baseline-understanding visuals,
-- creating the simulation-to-lightpath mapping note,
-- exporting the formal fabrication package,
-- performing fabrication-readiness checks for the chosen baseline.
+**Phase 2: Fabrication Handoff (Requires Lab Parameters)**
+- [ ] 5. **Parameter Sync:** Obtain precise fabrication parameters from the lab (wavelength, pixel size, refractive index, base thickness, maximum relief height, quantization levels).
+- [ ] 6. **Final Export:** Substitute the real parameters into `export_phase_plate.py` to generate the final Fabrication Package.
