@@ -83,6 +83,21 @@ Trained weights and large experiment artifacts are distributed via [GitHub Relea
 
 ---
 
+## Current Official Lookup
+
+If you are trying to find the current fabrication-target phase package first, start here:
+
+- [docs/INDEX.md](docs/INDEX.md)
+- [docs/official-artifacts/fmnist5-phaseonly-aligned/](docs/official-artifacts/fmnist5-phaseonly-aligned/)
+- [docs/fabrication/fashion-mnist-phase-only-lightpath-protocol.md](docs/fabrication/fashion-mnist-phase-only-lightpath-protocol.md)
+- [docs/fabrication/fashion-mnist-phase-only-lab-handoff.md](docs/fabrication/fashion-mnist-phase-only-lab-handoff.md)
+
+Current short name for this line: `fmnist5-phaseonly-aligned`
+
+This name now maps together the current checkpoint/manifest, understanding-report figures, aligned export package, and the repo-tracked directly reusable phase files.
+
+---
+
 ## Installation
 
 Requirements:
