@@ -11,8 +11,9 @@ This note is the single handoff page for the first lab-facing fabrication round 
 
 - Baseline note: `docs/baselines/fashion-mnist-phase-only-5layer-physics-aligned.md`
 - Lightpath protocol: `docs/fabrication/fashion-mnist-phase-only-lightpath-protocol.md`
-- Checkpoint: `checkpoints/best_fashion_mnist.baseline_5layer_physics_aligned.pth`
-- Manifest: `checkpoints/best_fashion_mnist.baseline_5layer_physics_aligned.json`
+- Repo-tracked official artifact bundle: `docs/official-artifacts/fmnist5-phaseonly-aligned/`
+- Checkpoint: `checkpoints/best_fashion_mnist.fmnist5-phaseonly-aligned.pth`
+- Manifest: `checkpoints/best_fashion_mnist.fmnist5-phaseonly-aligned.json`
 - Task: `classification`
 - Dataset: `Fashion-MNIST`
 - Layers: `5`
@@ -42,8 +43,8 @@ Replace the angle-bracket placeholders only after the lab values are confirmed.
 ```bash
 uv run python export_phase_plate.py \
   --task classification \
-  --checkpoint checkpoints/best_fashion_mnist.baseline_5layer_physics_aligned.pth \
-  --output-dir exports/final_fashion_mnist_phase_only_<YYYYMMDD> \
+  --checkpoint checkpoints/best_fashion_mnist.fmnist5-phaseonly-aligned.pth \
+  --output-dir exports/fmnist5-phaseonly-aligned-final_<YYYYMMDD> \
   --size 200 \
   --layers 5 \
   --wavelength 0.00075 \
@@ -73,7 +74,7 @@ Expected outputs under the chosen export root:
 
 Run these checks immediately after the final export.
 
-1. Confirm `metadata.json` still points to `checkpoints/best_fashion_mnist.baseline_5layer_physics_aligned.pth`.
+1. Confirm `metadata.json` still points to `checkpoints/best_fashion_mnist.fmnist5-phaseonly-aligned.pth`.
 2. Confirm `report.md` records the intended `refractive_index`, `ambient_index`, `base_thickness_um`, `max_relief_um`, and `quantization_levels`.
 3. Check whether `clipped_pixels` is still acceptably low after the real `max_relief_um` is applied.
 4. Compare `raw height max` against `current exported relief max` to see how much phase structure is being flattened by the real relief limit.
@@ -109,3 +110,4 @@ Do not hand the design off as fabrication-ready if any of the following remains 
 
 - The current dry-run package remains a traceability reference, not the final fabrication package.
 - This handoff note is intentionally phase-only. The nonlinear `incoherent_intensity + back` line remains a later comparison branch rather than the first lab fabrication target.
+- For lookup, use `fmnist5-phaseonly-aligned` as the short official name for this fabrication line.

@@ -1,0 +1,25 @@
+{
+  "activation_hparams": {},
+  "activation_positions": [],
+  "activation_type": "none",
+  "batch_size": 64,
+  "best_val_accuracy": null,
+  "checkpoint": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn\\.worktrees\\fmnist5-phaseonly-organize\\checkpoints\\best_fashion_mnist.fmnist5-phaseonly-aligned.pth",
+  "dataset": "Fashion-MNIST",
+  "epochs": 20,
+  "experiment_stage": "fabrication_baseline",
+  "learning_rate": 0.01,
+  "optical_config": {
+    "layer_distance": 0.03,
+    "num_layers": 5,
+    "pixel_size": 0.0004,
+    "size": 200,
+    "wavelength": 0.00075
+  },
+  "paper_target_accuracy": 81.13,
+  "run_name": "fmnist5-phaseonly-aligned",
+  "seed": 42,
+  "task": "classification",
+  "test_accuracy": 84.46,
+  "test_loss": 0.025319796547293664
+}

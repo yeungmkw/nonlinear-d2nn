@@ -16,7 +16,7 @@ This protocol maps the regenerated physics-aligned baseline to the first optical
 
 ## Current Simulation References
 
-- Regenerated baseline figures: `figures/fashion_mnist/baseline_5layer_physics_aligned/`
+- Regenerated baseline figures: `figures/fashion_mnist/fmnist5-phaseonly-aligned/`
 - Baseline artifacts: `phase_masks.png`, `output_energy.png`, `confusion_matrix.png`, `sample_output_patterns.png`, `quantization_sensitivity.png`
 - Nonlinear comparison figures: `figures/fashion_mnist/incoherent_back_20ep/`
 - Nonlinear reference: `checkpoints/best_fashion_mnist.incoherent_back_20ep.pth` with `incoherent_intensity` activation at position `[5]`
@@ -33,7 +33,7 @@ This protocol maps the regenerated physics-aligned baseline to the first optical
 
 ## Current Dry-Run Package
 
-- Export root: `exports/best_fashion_mnist.baseline_5layer_physics_aligned/best_fashion_mnist.baseline_5layer_physics_aligned/`
+- Export root: `exports/fmnist5-phaseonly-aligned/best_fashion_mnist.fmnist5-phaseonly-aligned/`
 - Generated files: `phase_masks.npy`, `height_map.npy`, `height_map_manufacturable.npy`, `thickness_map.npy`, `height_map_quantized.npy`, `report.md`, `metadata.json`, `layers/`, `stl/`
 - Quantization levels: `256`
 - Base thickness: `500.0 um`
@@ -64,4 +64,7 @@ If the fabricated output does not match the simulation trends, debug in this ord
 
 This protocol is now backed by a regenerated `fabrication_baseline` checkpoint, saved understanding-report figures, and a complete export dry-run. The next fabrication handoff should preserve this optical mapping while replacing the dry-run material/process assumptions with lab-confirmed values.
 
+For lookup, the current official short name for this fabrication line is `fmnist5-phaseonly-aligned`.
+
 For the lab-facing parameter checklist, final export template, and first-session checklist, use `docs/fabrication/fashion-mnist-phase-only-lab-handoff.md`.
+For the repo-tracked directly reusable phase/export files, use `docs/official-artifacts/fmnist5-phaseonly-aligned/`.

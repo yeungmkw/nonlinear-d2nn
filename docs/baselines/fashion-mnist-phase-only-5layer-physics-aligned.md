@@ -7,11 +7,11 @@
 - Architecture: phase-only D2NN, 5 layers, 200 x 200 pixels per layer
 - Experiment stage: `fabrication_baseline`
 - Seed: `42`
-- Checkpoint target: `checkpoints/best_fashion_mnist.baseline_5layer_physics_aligned.pth`
-- Manifest target: `checkpoints/best_fashion_mnist.baseline_5layer_physics_aligned.json`
+- Checkpoint target: `checkpoints/best_fashion_mnist.fmnist5-phaseonly-aligned.pth`
+- Manifest target: `checkpoints/best_fashion_mnist.fmnist5-phaseonly-aligned.json`
 - Source commit: `94bb34b`
 - Planning/spec alignment commit: `7763241`
-- Frozen artifact name: `baseline_5layer_physics_aligned`
+- Frozen artifact name: `fmnist5-phaseonly-aligned`
 
 ## Optical Configuration
 
@@ -30,7 +30,7 @@
 
 ## Understanding Report
 
-- Baseline figures: `figures/fashion_mnist/baseline_5layer_physics_aligned/`
+- Baseline figures: `figures/fashion_mnist/fmnist5-phaseonly-aligned/`
 - Generated artifacts: `phase_masks.png`, `output_energy.png`, `confusion_matrix.png`, `sample_output_patterns.png`, `quantization_sensitivity.png`
 - Quantization sensitivity on the regenerated baseline: `84.53%` at full precision, `83.97%` at `8` levels, `84.57%` at `16` levels, `84.48%` at `32` levels, `84.55%` at `64` levels, `84.51%` at `128` levels
 - Interpretation: `16` through `128` uniform phase levels stay effectively flat for this baseline, while `8` levels is the first noticeable drop.
@@ -59,7 +59,7 @@ uv run python train.py \
   --wavelength 0.00075 \
   --layer-distance 0.03 \
   --pixel-size 0.0004 \
-  --run-name baseline_5layer_physics_aligned \
+  --run-name fmnist5-phaseonly-aligned \
   --experiment-stage fabrication_baseline \
   --seed 42
 ```
@@ -67,3 +67,7 @@ uv run python train.py \
 ## Notes
 
 This file tracks the regenerated physics-aligned baseline that feeds the current fabrication workflow. Future optical and nonlinear comparisons should refer back to this record before changing the task line or optical assumptions.
+
+For lookup purposes, the short official name for this line is `fmnist5-phaseonly-aligned`. Use that name first when searching the repository for the current fabrication-target checkpoint, figures, and export package.
+
+The current repo-tracked official artifact bundle for this line lives at `docs/official-artifacts/fmnist5-phaseonly-aligned/`.

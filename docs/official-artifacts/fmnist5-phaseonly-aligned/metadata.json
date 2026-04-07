@@ -1,0 +1,96 @@
+{
+  "checkpoint": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn\\.worktrees\\fmnist5-phaseonly-organize\\checkpoints\\best_fashion_mnist.fmnist5-phaseonly-aligned.pth",
+  "exported_at_utc": "2026-04-07T01:39:30.535491+00:00",
+  "fabrication_readiness": {
+    "clipped_fraction": 0.0,
+    "clipped_pixels": 0,
+    "has_relief_limit": false,
+    "manufacturable_height_max_m": 0.0010377749567851424,
+    "max_relief_m": null,
+    "pixel_size_m": 0.0004,
+    "raw_height_max_m": 0.0010377749567851424,
+    "thickness_max_m": 0.0015377749223262072,
+    "total_pixels": 200000
+  },
+  "height_map_file": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn\\.worktrees\\fmnist5-phaseonly-organize\\exports\\fmnist5-phaseonly-aligned\\best_fashion_mnist.fmnist5-phaseonly-aligned\\height_map.npy",
+  "layer_stats": [
+    {
+      "height_max_m": 0.0010377749567851424,
+      "height_mean_m": 0.0005175669793970883,
+      "height_min_m": 4.945195364314259e-10,
+      "layer": 1,
+      "phase_max_rad": 6.28318452835083,
+      "phase_min_rad": 2.994057240357506e-06,
+      "thickness_max_m": 0.0015377749223262072,
+      "thickness_mean_m": 0.0010175671195611358,
+      "thickness_min_m": 0.000500000489410013
+    },
+    {
+      "height_max_m": 0.001037771813571453,
+      "height_mean_m": 0.0005154728423804045,
+      "height_min_m": 4.657518815065487e-09,
+      "layer": 2,
+      "phase_max_rad": 6.28316593170166,
+      "phase_min_rad": 2.819884139171336e-05,
+      "thickness_max_m": 0.0015377718955278397,
+      "thickness_mean_m": 0.0010154728079214692,
+      "thickness_min_m": 0.0005000046803615987
+    },
+    {
+      "height_max_m": 0.0010377465514466166,
+      "height_mean_m": 0.00051338184857741,
+      "height_min_m": 3.2105222924627697e-09,
+      "layer": 3,
+      "phase_max_rad": 6.283012390136719,
+      "phase_min_rad": 1.9438033632468432e-05,
+      "thickness_max_m": 0.0015377465169876814,
+      "thickness_mean_m": 0.0010133819887414575,
+      "thickness_min_m": 0.0005000032251700759
+    },
+    {
+      "height_max_m": 0.0010377737926319242,
+      "height_mean_m": 0.0005169817595742643,
+      "height_min_m": 5.134312974774957e-09,
+      "layer": 4,
+      "phase_max_rad": 6.283177375793457,
+      "phase_min_rad": 3.1085579394130036e-05,
+      "thickness_max_m": 0.001537773758172989,
+      "thickness_mean_m": 0.00101698178332299,
+      "thickness_min_m": 0.000500005146022886
+    },
+    {
+      "height_max_m": 0.0010377749567851424,
+      "height_mean_m": 0.00047915830509737134,
+      "height_min_m": 7.625302167468817e-09,
+      "layer": 5,
+      "phase_max_rad": 6.28318452835083,
+      "phase_min_rad": 4.61672134406399e-05,
+      "thickness_max_m": 0.0015377749223262072,
+      "thickness_mean_m": 0.0009791582124307752,
+      "thickness_min_m": 0.0005000076489523053
+    }
+  ],
+  "manufacturable_height_map_file": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn\\.worktrees\\fmnist5-phaseonly-organize\\exports\\fmnist5-phaseonly-aligned\\best_fashion_mnist.fmnist5-phaseonly-aligned\\height_map_manufacturable.npy",
+  "manufacturing": {
+    "base_thickness_um": 500.0,
+    "export_stl": true,
+    "max_relief_um": null
+  },
+  "material": {
+    "ambient_index": 1.0,
+    "refractive_index": 1.7227
+  },
+  "notes": "height_map assumes transmissive phase-only plates with wrapped phase in [0, 2pi).",
+  "optical_config": {
+    "layer_distance": 0.03,
+    "num_layers": 5,
+    "pixel_size": 0.0004,
+    "size": 200,
+    "wavelength": 0.00075
+  },
+  "phase_masks_file": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn\\.worktrees\\fmnist5-phaseonly-organize\\exports\\fmnist5-phaseonly-aligned\\best_fashion_mnist.fmnist5-phaseonly-aligned\\phase_masks.npy",
+  "quantization_levels": 256,
+  "quantized_height_map_file": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn\\.worktrees\\fmnist5-phaseonly-organize\\exports\\fmnist5-phaseonly-aligned\\best_fashion_mnist.fmnist5-phaseonly-aligned\\height_map_quantized.npy",
+  "task": "classification",
+  "thickness_map_file": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn\\.worktrees\\fmnist5-phaseonly-organize\\exports\\fmnist5-phaseonly-aligned\\best_fashion_mnist.fmnist5-phaseonly-aligned\\thickness_map.npy"
+}
