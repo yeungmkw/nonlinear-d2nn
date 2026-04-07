@@ -175,6 +175,16 @@ uv run python export_phase_plate.py --task classification \
 
 *Outputs are generated under `exports/<checkpoint_name>/`, including a Markdown report, `.npy` arrays, per-layer `.csv` data and optional `.stl` meshes.*
 
+For the current official `fmnist5-phaseonly-aligned` fabrication line, use the frozen final-export wrapper instead:
+
+```bash
+# Copy the template once, fill in the lab-confirmed values, then run:
+copy fabrication/fmnist5-phaseonly-aligned.lab.template.json fabrication/fmnist5-phaseonly-aligned.lab.json
+uv run python export_fmnist5_phaseonly_aligned_final.py --lab-config fabrication/fmnist5-phaseonly-aligned.lab.json
+```
+
+*The wrapper freezes the checkpoint and optical preset, writes the export under `exports/fmnist5-phaseonly-aligned-final_<YYYYMMDD>/`, and adds `validation_summary.json`. CLI values can still override the JSON for one-off scans.*
+
 ### 5. Print or run an ablation grid
 
 ```bash

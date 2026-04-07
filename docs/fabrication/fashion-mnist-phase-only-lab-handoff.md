@@ -26,6 +26,11 @@ This note is the single handoff page for the first lab-facing fabrication round 
 
 These items must be confirmed before the final fabrication export is treated as manufacturing-ready.
 
+Recommended single source of truth:
+
+- `fabrication/fmnist5-phaseonly-aligned.lab.template.json`
+- Copy it to a lab-specific JSON file and fill in the confirmed values before final export.
+
 | Parameter | Status | Current value | What to confirm in lab |
 |---|---|---:|---|
 | `refractive_index` | pending | `1.7227` dry-run only | final material index used for the real plate |
@@ -41,22 +46,17 @@ These items must be confirmed before the final fabrication export is treated as 
 Replace the angle-bracket placeholders only after the lab values are confirmed.
 
 ```bash
-uv run python export_phase_plate.py \
-  --task classification \
-  --checkpoint checkpoints/best_fashion_mnist.fmnist5-phaseonly-aligned.pth \
-  --output-dir exports/fmnist5-phaseonly-aligned-final_<YYYYMMDD> \
-  --size 200 \
-  --layers 5 \
-  --wavelength 0.00075 \
-  --layer-distance 0.03 \
-  --pixel-size 0.0004 \
-  --refractive-index <REFRACTIVE_INDEX> \
-  --ambient-index <AMBIENT_INDEX> \
-  --base-thickness-um <BASE_THICKNESS_UM> \
-  --max-relief-um <MAX_RELIEF_UM> \
-  --quantization-levels <QUANTIZATION_LEVELS> \
-  --export-stl
+copy fabrication/fmnist5-phaseonly-aligned.lab.template.json fabrication/fmnist5-phaseonly-aligned.lab.json
 ```
+
+Then fill the confirmed values and run:
+
+```bash
+uv run python export_fmnist5_phaseonly_aligned_final.py \
+  --lab-config fabrication/fmnist5-phaseonly-aligned.lab.json
+```
+
+Optional: any CLI value can still override the JSON for one-off checks, for example `--max-relief-um 1050`.
 
 Expected outputs under the chosen export root:
 
@@ -67,6 +67,7 @@ Expected outputs under the chosen export root:
 - `height_map_quantized.npy`
 - `report.md`
 - `metadata.json`
+- `validation_summary.json`
 - `layers/`
 - `stl/`
 

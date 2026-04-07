@@ -1,0 +1,39 @@
+{
+  "preset": {
+    "name": "fmnist5-phaseonly-aligned",
+    "task": "classification",
+    "checkpoint": "checkpoints/best_fashion_mnist.fmnist5-phaseonly-aligned.pth",
+    "wavelength_m": 0.00075,
+    "layer_distance_m": 0.03,
+    "pixel_size_m": 0.0004,
+    "size": 200,
+    "layers": 5
+  },
+  "material": {
+    "refractive_index": null,
+    "ambient_index": null,
+    "material_name": "",
+    "material_vendor": "",
+    "material_batch": "",
+    "index_measurement_method": "",
+    "index_measurement_wavelength_m": 0.00075
+  },
+  "process": {
+    "base_thickness_um": null,
+    "max_relief_um": null,
+    "quantization_levels": null,
+    "stl_required": true
+  },
+  "mechanical": {
+    "clear_aperture_mm": null,
+    "mount_aperture_mm": null,
+    "orientation_marking_scheme": ""
+  },
+  "traceability": {
+    "lab_name": "",
+    "operator": "",
+    "confirmation_date": "",
+    "approved_by": "",
+    "notes": ""
+  }
+}

@@ -4,8 +4,11 @@ import unittest
 import importlib
 import subprocess
 import sys
+import json
+from datetime import date
 from pathlib import Path
 
+import numpy as np
 import torch
 from PIL import Image
 
@@ -74,6 +77,7 @@ class D2NNCoreTests(unittest.TestCase):
             ("train.py", "D2NN training"),
             ("visualize.py", "D2NN visualization"),
             ("export_phase_plate.py", "Export phase masks / height maps"),
+            ("export_fmnist5_phaseonly_aligned_final.py", "Final export wrapper"),
         ]
         for script_name, expected in cases:
             result = subprocess.run(
@@ -1196,6 +1200,333 @@ class D2NNCoreTests(unittest.TestCase):
             content = path.read_text(encoding="utf-8")
             self.assertIn("solid layer_01", content)
             self.assertIn("facet normal", content)
+
+    def test_final_export_wrapper_default_output_dir_uses_official_date_stamp(self):
+        wrapper = importlib.import_module("export_fmnist5_phaseonly_aligned_final")
+        output_dir = wrapper.build_default_output_dir(current_date=date(2026, 4, 7))
+        self.assertEqual(output_dir, Path("exports/fmnist5-phaseonly-aligned-final_20260407"))
+
+    def test_final_export_wrapper_builds_expected_export_command(self):
+        wrapper = importlib.import_module("export_fmnist5_phaseonly_aligned_final")
+        command = wrapper.build_export_command(
+            python_executable="python",
+            checkpoint_path=wrapper.OFFICIAL_PRESET["checkpoint"],
+            output_dir=Path("exports/final"),
+            refractive_index=1.7227,
+            ambient_index=1.0,
+            base_thickness_um=500.0,
+            max_relief_um=900.0,
+            quantization_levels=256,
+            export_stl=True,
+        )
+        self.assertEqual(command[0], "python")
+        self.assertEqual(command[2], "export_phase_plate.py")
+        self.assertIn("--checkpoint", command)
+        self.assertIn("checkpoints/best_fashion_mnist.fmnist5-phaseonly-aligned.pth", command)
+        self.assertIn("--task", command)
+        self.assertIn("classification", command)
+        self.assertIn("--wavelength", command)
+        self.assertIn("0.00075", command)
+        self.assertIn("--layer-distance", command)
+        self.assertIn("0.03", command)
+        self.assertIn("--pixel-size", command)
+        self.assertIn("0.0004", command)
+        self.assertIn("--export-stl", command)
+
+    def test_final_export_wrapper_loads_lab_config(self):
+        wrapper = importlib.import_module("export_fmnist5_phaseonly_aligned_final")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "lab.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "material": {
+                            "refractive_index": 1.8,
+                            "ambient_index": 1.0,
+                        },
+                        "process": {
+                            "base_thickness_um": 500.0,
+                            "max_relief_um": 950.0,
+                            "quantization_levels": 256,
+                            "stl_required": True,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            config = wrapper.load_lab_config(config_path)
+            self.assertEqual(config["refractive_index"], 1.8)
+            self.assertEqual(config["ambient_index"], 1.0)
+            self.assertEqual(config["base_thickness_um"], 500.0)
+            self.assertEqual(config["max_relief_um"], 950.0)
+            self.assertEqual(config["quantization_levels"], 256)
+            self.assertTrue(config["export_stl"])
+
+    def test_final_export_wrapper_loads_lab_config_with_utf8_bom(self):
+        wrapper = importlib.import_module("export_fmnist5_phaseonly_aligned_final")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "lab.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "material": {
+                            "refractive_index": 1.8,
+                            "ambient_index": 1.0,
+                        },
+                        "process": {
+                            "base_thickness_um": 500.0,
+                            "max_relief_um": 950.0,
+                            "quantization_levels": 256,
+                            "stl_required": False,
+                        },
+                    }
+                ),
+                encoding="utf-8-sig",
+            )
+
+            config = wrapper.load_lab_config(config_path)
+            self.assertEqual(config["refractive_index"], 1.8)
+            self.assertFalse(config["export_stl"])
+
+    def test_final_export_wrapper_cli_values_override_lab_config(self):
+        wrapper = importlib.import_module("export_fmnist5_phaseonly_aligned_final")
+        parser = wrapper.build_parser()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "lab.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "material": {
+                            "refractive_index": 1.8,
+                            "ambient_index": 1.0,
+                        },
+                        "process": {
+                            "base_thickness_um": 500.0,
+                            "max_relief_um": 950.0,
+                            "quantization_levels": 256,
+                            "stl_required": False,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            args = parser.parse_args(
+                [
+                    "--lab-config",
+                    str(config_path),
+                    "--max-relief-um",
+                    "1000",
+                    "--export-stl",
+                ]
+            )
+            resolved = wrapper.resolve_lab_inputs(args)
+            self.assertEqual(resolved["refractive_index"], 1.8)
+            self.assertEqual(resolved["max_relief_um"], 1000.0)
+            self.assertTrue(resolved["export_stl"])
+
+    def test_final_export_wrapper_requires_complete_lab_inputs_after_merge(self):
+        wrapper = importlib.import_module("export_fmnist5_phaseonly_aligned_final")
+        parser = wrapper.build_parser()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "lab.json"
+            config_path.write_text(json.dumps({"material": {"refractive_index": 1.8}}), encoding="utf-8")
+            args = parser.parse_args(["--lab-config", str(config_path)])
+            with self.assertRaises(ValueError):
+                wrapper.resolve_lab_inputs(args)
+
+    def test_final_export_wrapper_resolves_official_checkpoint_in_repo_root(self):
+        wrapper = importlib.import_module("export_fmnist5_phaseonly_aligned_final")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir)
+            checkpoint_path = repo_root / wrapper.OFFICIAL_PRESET["checkpoint"]
+            checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+            checkpoint_path.write_bytes(b"stub")
+
+            resolved = wrapper.resolve_checkpoint_path(repo_root)
+            self.assertEqual(resolved, checkpoint_path)
+
+    def test_final_export_wrapper_bootstraps_checkpoint_from_official_phase_masks(self):
+        wrapper = importlib.import_module("export_fmnist5_phaseonly_aligned_final")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir)
+            artifact_dir = repo_root / "docs" / "official-artifacts" / "fmnist5-phaseonly-aligned"
+            artifact_dir.mkdir(parents=True, exist_ok=True)
+            np.save(artifact_dir / "phase_masks.npy", np.zeros((5, 200, 200), dtype=np.float32))
+            (artifact_dir / "source_checkpoint_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "task": "classification",
+                        "dataset": "Fashion-MNIST",
+                        "run_name": "fmnist5-phaseonly-aligned",
+                        "experiment_stage": "fabrication_baseline",
+                        "seed": 42,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            resolved = wrapper.resolve_checkpoint_path(repo_root)
+            self.assertEqual(resolved, repo_root / wrapper.OFFICIAL_PRESET["checkpoint"])
+            self.assertTrue(resolved.exists())
+            manifest_path = resolved.with_suffix(".json")
+            self.assertTrue(manifest_path.exists())
+
+    def test_final_export_wrapper_raises_clear_error_when_checkpoint_and_artifacts_are_missing(self):
+        wrapper = importlib.import_module("export_fmnist5_phaseonly_aligned_final")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir)
+            with self.assertRaises(FileNotFoundError) as ctx:
+                wrapper.resolve_checkpoint_path(repo_root)
+        self.assertIn("best_fashion_mnist.fmnist5-phaseonly-aligned.pth", str(ctx.exception))
+
+    def test_final_export_wrapper_validation_summary_is_pass_when_unclipped(self):
+        wrapper = importlib.import_module("export_fmnist5_phaseonly_aligned_final")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            export_root = Path(tmpdir)
+            for rel_path in (
+                "phase_masks.npy",
+                "height_map.npy",
+                "height_map_manufacturable.npy",
+                "thickness_map.npy",
+                "height_map_quantized.npy",
+                "report.md",
+                "metadata.json",
+            ):
+                path = export_root / rel_path
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("stub", encoding="utf-8")
+
+            metadata = {
+                "checkpoint": str(wrapper.OFFICIAL_PRESET["checkpoint"]),
+                "manufacturing": {
+                    "base_thickness_um": 500.0,
+                    "max_relief_um": 900.0,
+                    "export_stl": False,
+                },
+                "quantization_levels": 256,
+                "fabrication_readiness": {
+                    "clipped_pixels": 0,
+                    "clipped_fraction": 0.0,
+                    "raw_height_max_m": 8e-4,
+                    "manufacturable_height_max_m": 8e-4,
+                    "thickness_max_m": 1.3e-3,
+                },
+            }
+            (export_root / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+
+            summary = wrapper.build_validation_summary(export_root)
+            self.assertEqual(summary["status"], "PASS")
+            self.assertFalse(summary["issues"])
+
+    def test_final_export_wrapper_validation_summary_is_warn_for_minor_clipping(self):
+        wrapper = importlib.import_module("export_fmnist5_phaseonly_aligned_final")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            export_root = Path(tmpdir)
+            for rel_path in (
+                "phase_masks.npy",
+                "height_map.npy",
+                "height_map_manufacturable.npy",
+                "thickness_map.npy",
+                "height_map_quantized.npy",
+                "report.md",
+                "metadata.json",
+            ):
+                path = export_root / rel_path
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("stub", encoding="utf-8")
+
+            metadata = {
+                "checkpoint": str(wrapper.OFFICIAL_PRESET["checkpoint"]),
+                "manufacturing": {
+                    "base_thickness_um": 500.0,
+                    "max_relief_um": 900.0,
+                    "export_stl": False,
+                },
+                "quantization_levels": 256,
+                "fabrication_readiness": {
+                    "clipped_pixels": 10,
+                    "clipped_fraction": 0.005,
+                    "raw_height_max_m": 8e-4,
+                    "manufacturable_height_max_m": 7.5e-4,
+                    "thickness_max_m": 1.25e-3,
+                },
+            }
+            (export_root / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+
+            summary = wrapper.build_validation_summary(export_root)
+            self.assertEqual(summary["status"], "WARN")
+            self.assertTrue(summary["issues"])
+
+    def test_final_export_wrapper_validation_summary_is_stop_for_large_clipping_or_missing_files(self):
+        wrapper = importlib.import_module("export_fmnist5_phaseonly_aligned_final")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            export_root = Path(tmpdir)
+            (export_root / "metadata.json").write_text(
+                json.dumps(
+                    {
+                        "checkpoint": str(wrapper.OFFICIAL_PRESET["checkpoint"]),
+                        "manufacturing": {
+                            "base_thickness_um": 500.0,
+                            "max_relief_um": 900.0,
+                            "export_stl": False,
+                        },
+                        "quantization_levels": 256,
+                        "fabrication_readiness": {
+                            "clipped_pixels": 2000,
+                            "clipped_fraction": 0.05,
+                            "raw_height_max_m": 8e-4,
+                            "manufacturable_height_max_m": 6e-4,
+                            "thickness_max_m": 1.1e-3,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            summary = wrapper.build_validation_summary(export_root)
+            self.assertEqual(summary["status"], "STOP")
+            self.assertGreaterEqual(len(summary["issues"]), 2)
+
+    def test_final_export_wrapper_validation_summary_flags_same_name_wrong_checkpoint_path(self):
+        wrapper = importlib.import_module("export_fmnist5_phaseonly_aligned_final")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            export_root = Path(tmpdir)
+            for rel_path in (
+                "phase_masks.npy",
+                "height_map.npy",
+                "height_map_manufacturable.npy",
+                "thickness_map.npy",
+                "height_map_quantized.npy",
+                "report.md",
+                "metadata.json",
+            ):
+                path = export_root / rel_path
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("stub", encoding="utf-8")
+
+            wrong_checkpoint = Path("D:/other/checkpoints") / wrapper.OFFICIAL_PRESET["checkpoint"].name
+            metadata = {
+                "checkpoint": str(wrong_checkpoint),
+                "manufacturing": {
+                    "base_thickness_um": 500.0,
+                    "max_relief_um": 900.0,
+                    "export_stl": False,
+                },
+                "quantization_levels": 256,
+                "fabrication_readiness": {
+                    "clipped_pixels": 0,
+                    "clipped_fraction": 0.0,
+                    "raw_height_max_m": 8e-4,
+                    "manufacturable_height_max_m": 8e-4,
+                    "thickness_max_m": 1.3e-3,
+                },
+            }
+            (export_root / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+
+            summary = wrapper.build_validation_summary(export_root)
+            self.assertIn("does not match the frozen official preset", " ".join(summary["issues"]))
 
 
 if __name__ == "__main__":

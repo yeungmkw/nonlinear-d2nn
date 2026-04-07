@@ -7,12 +7,14 @@ This index is the shortest path to the files that should be checked first.
 - Training: `train.py`
 - Visualization: `visualize.py`
 - Phase/export generation: `export_phase_plate.py`
+- Official final export wrapper: `export_fmnist5_phaseonly_aligned_final.py`
 
 ## Current Phase-Only Baseline
 
 - Baseline record: `docs/baselines/fashion-mnist-phase-only-5layer-physics-aligned.md`
 - Lightpath protocol: `docs/fabrication/fashion-mnist-phase-only-lightpath-protocol.md`
 - Lab handoff: `docs/fabrication/fashion-mnist-phase-only-lab-handoff.md`
+- Lab config template: `fabrication/fmnist5-phaseonly-aligned.lab.template.json`
 
 ## Official Artifacts
 
