@@ -7,7 +7,6 @@ from __future__ import annotations
 import argparse
 import time
 
-import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -21,7 +20,9 @@ from artifacts import (
     build_model_for_task,
     checkpoint_manifest_path,
     checkpoint_variant_path,
+    configure_matplotlib_backend,
     derive_experiment_run_name,
+    ensure_checkpoint_version,
     experiment_manifest_fields,
     load_checkpoint_state_dict,
     maybe_show,
@@ -31,6 +32,9 @@ from artifacts import (
     resolve_optics,
     save_manifest,
 )
+
+
+MODEL_VERSION = "rs_v1"
 
 
 CLASSIFICATION_DATASETS = {
@@ -200,10 +204,42 @@ def classification_split_lengths(total_train_size, val_size=5000):
     return total_train_size - val_size, val_size
 
 
+# Classification training now lives in train.py so teacher-facing logic stays centralized.
+# Keep these wrappers only for legacy imports and plotting helpers in this module.
 def d2nn_mse_loss(output, target, num_classes=10):
-    output_norm = output / (output.sum(dim=1, keepdim=True) + 1e-8)
-    target_onehot = F.one_hot(target, num_classes).float()
-    return F.mse_loss(output_norm, target_onehot)
+    from train import d2nn_mse_loss as _impl
+
+    return _impl(output, target, num_classes=num_classes)
+
+
+def phase_smoothness_regularizer(model):
+    from train import phase_smoothness_regularizer as _impl
+
+    return _impl(model)
+
+
+def classification_composite_loss(result, target, model, alpha=1.0, beta=0.1, gamma=0.01):
+    from train import classification_composite_loss as _impl
+
+    return _impl(result, target, model, alpha=alpha, beta=beta, gamma=gamma)
+
+
+def build_metric_history():
+    from train import build_metric_history as _impl
+
+    return _impl()
+
+
+def append_metric_history(history, *, split, total, mse, ce, reg, accuracy, contrast):
+    from train import append_metric_history as _impl
+
+    return _impl(history, split=split, total=total, mse=mse, ce=ce, reg=reg, accuracy=accuracy, contrast=contrast)
+
+
+def is_better_classification_checkpoint(candidate, best):
+    from train import is_better_classification_checkpoint as _impl
+
+    return _impl(candidate, best)
 
 
 def resolve_experiment_seed(explicit_seed, manifest=None, default=42):
@@ -240,6 +276,7 @@ def format_activation_diagnostics(diagnostics):
 
 @torch.no_grad()
 def plot_sample_output_patterns(model, dataset, device, sample_indices, save_path=None, no_show=False):
+    plt = configure_matplotlib_backend(no_show=no_show)
     sample_indices = parse_int_sequence(sample_indices)
     if not sample_indices:
         raise ValueError("sample_indices must not be empty")
@@ -297,12 +334,14 @@ def plot_quantization_sensitivity(
     save_path=None,
     no_show=False,
 ):
+    plt = configure_matplotlib_backend(no_show=no_show)
     levels = parse_int_sequence(levels)
     if not levels:
         raise ValueError("levels must not be empty")
 
     model.eval()
-    _baseline_loss, baseline_acc = evaluate_classification(model, test_loader, device)
+    baseline_metrics = evaluate_classification(model, test_loader, device)
+    baseline_acc = baseline_metrics["accuracy"]
     original_phases = [layer.phase.detach().clone() for layer in model.layers]
 
     results = [("baseline", baseline_acc)]
@@ -315,8 +354,8 @@ def plot_quantization_sensitivity(
             for layer, phase_mask in zip(model.layers, quantized):
                 layer.phase.copy_(phase_mask.to(device=layer.phase.device, dtype=layer.phase.dtype))
 
-            _, accuracy = evaluate_classification(model, test_loader, device)
-            results.append((str(level), accuracy))
+            metrics = evaluate_classification(model, test_loader, device)
+            results.append((str(level), metrics["accuracy"]))
     finally:
         for layer, original in zip(model.layers, original_phases):
             layer.phase.copy_(original)
@@ -360,6 +399,53 @@ def plot_quantization_sensitivity(
     plt.close(fig)
 
 
+def plot_classification_history(history, save_path=None, no_show=False):
+    plt = configure_matplotlib_backend(no_show=no_show)
+    train_history = history.get("train", {}) if history else {}
+    val_history = history.get("val", {}) if history else {}
+    train_accuracy = list(train_history.get("accuracy", ()))
+    val_accuracy = list(val_history.get("accuracy", ()))
+    train_contrast = list(train_history.get("contrast", ()))
+    val_contrast = list(val_history.get("contrast", ()))
+    epochs = list(range(1, max(len(train_accuracy), len(val_accuracy), len(train_contrast), len(val_contrast)) + 1))
+
+    if not epochs:
+        raise ValueError("history must contain at least one epoch of accuracy or contrast values")
+
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
+    accuracy_ax, contrast_ax = axes
+
+    if train_accuracy:
+        accuracy_ax.plot(range(1, len(train_accuracy) + 1), train_accuracy, label="train", color="#2563eb", linewidth=2)
+    if val_accuracy:
+        accuracy_ax.plot(range(1, len(val_accuracy) + 1), val_accuracy, label="val", color="#dc2626", linewidth=2)
+    accuracy_ax.set_title("Accuracy")
+    accuracy_ax.set_xlabel("Epoch")
+    accuracy_ax.set_ylabel("Accuracy (%)")
+    accuracy_ax.grid(alpha=0.2)
+    if train_accuracy or val_accuracy:
+        accuracy_ax.legend()
+
+    if train_contrast:
+        contrast_ax.plot(range(1, len(train_contrast) + 1), train_contrast, label="train", color="#2563eb", linewidth=2)
+    if val_contrast:
+        contrast_ax.plot(range(1, len(val_contrast) + 1), val_contrast, label="val", color="#dc2626", linewidth=2)
+    contrast_ax.set_title("Detector Contrast")
+    contrast_ax.set_xlabel("Epoch")
+    contrast_ax.set_ylabel("Contrast")
+    contrast_ax.grid(alpha=0.2)
+    if train_contrast or val_contrast:
+        contrast_ax.legend()
+
+    fig.suptitle("Classification Training History", fontsize=14)
+    fig.tight_layout()
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches="tight")
+        print(f"Saved: {save_path}")
+    maybe_show(no_show)
+    plt.close(fig)
+
+
 def build_experiment_grid(grid_name, args):
     base = {
         "task": args.task,
@@ -370,6 +456,9 @@ def build_experiment_grid(grid_name, args):
         "batch_size": args.batch_size,
         "lr": args.lr,
         "seed": args.seed,
+        "alpha": args.alpha,
+        "beta": args.beta,
+        "gamma": args.gamma,
     }
 
     if grid_name == "coherent_amplitude_positions":
@@ -460,6 +549,9 @@ def format_experiment_grid_commands(grid_name, args):
             f"--batch-size {spec['batch_size']}",
             f"--lr {spec['lr']}",
             f"--seed {spec['seed']}",
+            f"--alpha {spec['alpha']}",
+            f"--beta {spec['beta']}",
+            f"--gamma {spec['gamma']}",
             f"--experiment-stage {spec['experiment_stage']}",
             f"--activation-type {spec['activation_type']}",
             f"--activation-preset {spec['activation_preset']}",
@@ -478,166 +570,28 @@ def execute_experiment_grid(grid_name, args, runner):
         runner(spec_args)
 
 
-def train_classification_one_epoch(model, loader, optimizer, device, num_classes=10):
-    model.train()
-    total_loss = 0.0
-    correct = 0
-    total = 0
+def train_classification_one_epoch(model, loader, optimizer, device, alpha=1.0, beta=0.1, gamma=0.01):
+    from train import train_classification_one_epoch as _impl
 
-    for batch_idx, (data, target) in enumerate(loader):
-        data, target = data.to(device), target.to(device)
-        optimizer.zero_grad()
-
-        output = model(data)
-        loss = d2nn_mse_loss(output, target, num_classes)
-        loss.backward()
-        optimizer.step()
-
-        total_loss += loss.item() * data.size(0)
-        pred = output.argmax(dim=1)
-        correct += pred.eq(target).sum().item()
-        total += data.size(0)
-
-        if (batch_idx + 1) % 100 == 0:
-            print(f"  batch {batch_idx + 1}/{len(loader)}, loss: {loss.item():.4f}")
-
-    return total_loss / total, 100.0 * correct / total
+    return _impl(model, loader, optimizer, device, alpha=alpha, beta=beta, gamma=gamma)
 
 
 @torch.no_grad()
-def evaluate_classification(model, loader, device, num_classes=10):
-    model.eval()
-    total_loss = 0.0
-    correct = 0
-    total = 0
+def evaluate_classification(model, loader, device, alpha=1.0, beta=0.1, gamma=0.01):
+    from train import evaluate_classification as _impl
 
-    for data, target in loader:
-        data, target = data.to(device), target.to(device)
-        output = model(data)
-        total_loss += d2nn_mse_loss(output, target, num_classes).item() * data.size(0)
-        pred = output.argmax(dim=1)
-        correct += pred.eq(target).sum().item()
-        total += data.size(0)
-
-    return total_loss / total, 100.0 * correct / total
+    return _impl(model, loader, device, alpha=alpha, beta=beta, gamma=gamma)
 
 
 def run_classification_training(args, device, data_dir, save_dir):
-    dataset_cfg = get_classification_dataset_config(args.dataset)
-    print(f"Dataset: {dataset_cfg['display_name']}")
+    from train import run_classification_training as _impl
 
-    transform = build_classification_transform(dataset_cfg)
-    dataset_cls = dataset_cfg["dataset_cls"]
-    train_set = dataset_cls(data_dir, train=True, download=True, transform=transform)
-    test_set = dataset_cls(data_dir, train=False, download=True, transform=transform)
-    train_len, val_len = classification_split_lengths(len(train_set))
-    train_set, val_set = torch.utils.data.random_split(
-        train_set,
-        [train_len, val_len],
-        generator=torch.Generator().manual_seed(args.seed),
-    )
-
-    train_loader = DataLoader(
-        train_set,
-        batch_size=args.batch_size,
-        shuffle=True,
-        num_workers=0,
-        generator=torch.Generator().manual_seed(args.seed),
-    )
-    val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=False, num_workers=0)
-    test_loader = DataLoader(test_set, batch_size=args.batch_size, shuffle=False, num_workers=0)
-
-    optics = CLASSIFIER_PAPER_OPTICS.with_overrides(
-        size=args.size,
-        num_layers=args.layers,
-        wavelength=args.wavelength,
-        layer_distance=args.layer_distance,
-        pixel_size=args.pixel_size,
-    )
-    activation_type, activation_positions, activation_hparams = resolve_activation_config(args)
-    model = build_model_for_task(
-        "classification",
-        optics,
-        activation_type=activation_type,
-        activation_positions=activation_positions,
-        activation_hparams=activation_hparams,
-    ).to(device)
-    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"D2NN: {args.layers} layers, {args.size}x{args.size} neurons/layer, {total_params} trainable params")
-
-    optimizer = optim.Adam(model.parameters(), lr=args.lr)
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
-    resolved_run_name = derive_experiment_run_name(
-        run_name=args.run_name,
-        experiment_stage=args.experiment_stage,
-        activation_type=activation_type,
-        activation_positions=activation_positions,
-        activation_hparams=activation_hparams,
-        seed=args.seed,
-    )
-    checkpoint_path = checkpoint_variant_path(save_dir / dataset_cfg["checkpoint_name"], resolved_run_name)
-    manifest_path = checkpoint_manifest_path(checkpoint_path)
-    best_val_acc = 0.0
-    last_activation_stats = {}
-    if resolved_run_name:
-        print(f"Run name: {resolved_run_name}")
-
-    for epoch in range(1, args.epochs + 1):
-        t0 = time.time()
-        train_loss, train_acc = train_classification_one_epoch(model, train_loader, optimizer, device)
-        val_loss, val_acc = evaluate_classification(model, val_loader, device)
-        elapsed = time.time() - t0
-
-        print(
-            f"Epoch {epoch}/{args.epochs} ({elapsed:.1f}s) | "
-            f"Train loss: {train_loss:.4f} acc: {train_acc:.2f}% | "
-            f"Val loss: {val_loss:.4f} acc: {val_acc:.2f}%"
-        )
-        last_activation_stats = model_activation_diagnostics(model)
-        if last_activation_stats:
-            print(f"  activation stats: {format_activation_diagnostics(last_activation_stats)}")
-
-        if val_acc > best_val_acc:
-            best_val_acc = val_acc
-            torch.save(model.state_dict(), checkpoint_path)
-            print(f"  -> Saved best model (val acc: {val_acc:.2f}%)")
-
-        scheduler.step()
-
-    model.load_state_dict(torch.load(checkpoint_path, weights_only=True))
-    test_loss, test_acc = evaluate_classification(model, test_loader, device)
-    save_manifest(
-        manifest_path,
-        {
-            "task": "classification",
-            "dataset": dataset_cfg["display_name"],
-            "paper_target_accuracy": dataset_cfg["paper_target"],
-            "epochs": args.epochs,
-            "batch_size": args.batch_size,
-            "learning_rate": args.lr,
-            "best_val_accuracy": best_val_acc,
-            "test_accuracy": test_acc,
-            "test_loss": test_loss,
-            **experiment_manifest_fields(
-                checkpoint_path=checkpoint_path,
-                run_name=resolved_run_name,
-                experiment_stage=args.experiment_stage,
-                seed=args.seed,
-                optics=optics,
-                activation_type=activation_type,
-                activation_positions=activation_positions,
-                activation_hparams=activation_hparams,
-            ),
-            "activation_diagnostics": last_activation_stats,
-        },
-    )
-    paper_target = dataset_cfg["paper_target"]
-    paper_target_text = f"{paper_target:.2f}%" if paper_target is not None else "n/a"
-    print(f"\nTest accuracy: {test_acc:.2f}% (paper target: {paper_target_text}, saved to {checkpoint_path.name})")
+    return _impl(args, device, data_dir, save_dir)
 
 
 @torch.no_grad()
 def plot_output_energy(model, test_loader, device, class_names, save_path=None, no_show=False):
+    plt = configure_matplotlib_backend(no_show=no_show)
     model.eval()
     size = model.size
     num_classes = model.num_classes
@@ -674,6 +628,7 @@ def plot_output_energy(model, test_loader, device, class_names, save_path=None, 
 
 @torch.no_grad()
 def plot_confusion_matrix(model, test_loader, device, class_names, save_path=None, no_show=False):
+    plt = configure_matplotlib_backend(no_show=no_show)
     model.eval()
     num_classes = model.num_classes
     confusion = torch.zeros(num_classes, num_classes, dtype=torch.int64)
@@ -720,6 +675,12 @@ def run_classification_visualization(args):
     dataset_cfg = get_classification_dataset_config(args.dataset)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     manifest = read_checkpoint_manifest(args.checkpoint)
+    ensure_checkpoint_version(
+        manifest,
+        expected_version=MODEL_VERSION,
+        checkpoint_path=args.checkpoint,
+        allow_missing=True,
+    )
     state_dict = load_checkpoint_state_dict(args.checkpoint, map_location=device)
 
     optics = resolve_optics(
@@ -769,6 +730,13 @@ def run_classification_visualization(args):
         save_path=out_dir / "confusion_matrix.png",
         no_show=args.no_show,
     )
+    history = (manifest or {}).get("history")
+    if history:
+        plot_classification_history(
+            history,
+            save_path=out_dir / "classification_history.png",
+            no_show=args.no_show,
+        )
 
     if getattr(args, "understanding_report", False):
         sample_indices = parse_int_sequence(args.sample_indices)
@@ -986,6 +954,7 @@ def run_imaging_training(args, device, data_dir, save_dir):
                 activation_type=activation_type,
                 activation_positions=activation_positions,
                 activation_hparams=activation_hparams,
+                model_version=MODEL_VERSION,
             ),
             "activation_diagnostics": last_activation_stats,
         },
@@ -995,6 +964,7 @@ def run_imaging_training(args, device, data_dir, save_dir):
 
 @torch.no_grad()
 def plot_reconstructions(model, loader, num_samples, save_path=None, no_show=False, title_suffix=""):
+    plt = configure_matplotlib_backend(no_show=no_show)
     inputs, _ = next(iter(loader))
     inputs = inputs.to(next(model.parameters()).device)
     outputs = model(inputs).cpu()
@@ -1069,6 +1039,12 @@ def run_imaging_visualization(args):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     state_dict = load_checkpoint_state_dict(args.checkpoint, map_location=device)
+    ensure_checkpoint_version(
+        manifest,
+        expected_version=MODEL_VERSION,
+        checkpoint_path=args.checkpoint,
+        allow_missing=True,
+    )
     optics = resolve_optics(
         IMAGER_PAPER_OPTICS,
         state_dict=state_dict,

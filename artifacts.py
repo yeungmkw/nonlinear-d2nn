@@ -11,7 +11,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-import matplotlib.pyplot as plt
+import matplotlib
 import numpy as np
 import torch
 
@@ -75,6 +75,14 @@ IMAGER_PAPER_OPTICS = OpticalConfig(
     layer_distance=4e-3,
     pixel_size=0.3e-3,
 )
+
+
+def configure_matplotlib_backend(no_show=False):
+    if no_show:
+        matplotlib.use("Agg", force=True)
+    import matplotlib.pyplot as plt
+
+    return plt
 
 
 def save_manifest(path: Path, payload: dict[str, Any]) -> None:
@@ -170,6 +178,9 @@ def _format_run_value(value: Any) -> str:
     return _sanitize_run_name(str(value).replace("_", "-")).lower()
 
 
+DEFAULT_CLASSIFICATION_LOSS_CONFIG = {"alpha": 1.0, "beta": 0.1, "gamma": 0.01}
+
+
 def derive_experiment_run_name(
     *,
     run_name: str | None = None,
@@ -178,15 +189,22 @@ def derive_experiment_run_name(
     activation_positions=None,
     activation_hparams: dict[str, Any] | None = None,
     seed: int | None = None,
+    loss_config: dict[str, Any] | None = None,
 ):
     if run_name:
         return run_name
 
-    if activation_type in (None, "", "none"):
+    loss_config = dict(loss_config or {})
+    has_nondefault_loss_config = any(
+        value is not None and value != DEFAULT_CLASSIFICATION_LOSS_CONFIG.get(key)
+        for key, value in loss_config.items()
+    )
+
+    if activation_type in (None, "", "none") and not has_nondefault_loss_config:
         return None
 
     stage_label = (experiment_stage or "nonlinear").replace("_", "-")
-    activation_label = str(activation_type).replace("_", "-")
+    activation_label = str(activation_type or "none").replace("_", "-")
     parts = [f"stage-{stage_label}", f"act-{activation_label}"]
 
     if activation_positions:
@@ -209,6 +227,12 @@ def derive_experiment_run_name(
             continue
         token_key = key.replace("_", "-")
         parts.append(f"{token_key}-{_format_run_value(value)}")
+
+    for key in ("alpha", "beta", "gamma"):
+        value = loss_config.get(key)
+        if value is None:
+            continue
+        parts.append(f"{key}-{_format_run_value(value)}")
 
     if seed is not None:
         parts.append(f"seed-{seed}")
@@ -239,6 +263,8 @@ def experiment_manifest_fields(
     activation_type=None,
     activation_positions=None,
     activation_hparams=None,
+    model_version=None,
+    loss_config=None,
 ):
     payload = {
         "checkpoint": str(Path(checkpoint_path)),
@@ -248,10 +274,22 @@ def experiment_manifest_fields(
         "activation_type": activation_type,
         "activation_positions": list(activation_positions or ()),
         "activation_hparams": dict(activation_hparams or {}),
+        "model_version": model_version,
+        "loss_config": dict(loss_config or {}),
     }
     if optics is not None:
         payload["optical_config"] = optical_config_dict(optics)
     return payload
+
+
+def ensure_checkpoint_version(manifest, expected_version, checkpoint_path, allow_missing=False):
+    found_version = (manifest or {}).get("model_version")
+    if allow_missing and found_version is None:
+        return
+    if found_version != expected_version:
+        raise ValueError(
+            f"Checkpoint {checkpoint_path} has model_version={found_version!r}; expected model_version={expected_version!r}"
+        )
 
 
 def read_manifest(path):
@@ -267,12 +305,14 @@ def read_checkpoint_manifest(checkpoint_path):
 
 def maybe_show(no_show: bool) -> None:
     if not no_show:
+        plt = configure_matplotlib_backend(no_show=no_show)
         plt.show()
 
 
 def plot_phase_masks(model, save_path=None, no_show=False):
+    plt = configure_matplotlib_backend(no_show=no_show)
     num_layers = len(model.layers)
-    fig, axes = plt.subplots(1, num_layers, figsize=(4 * num_layers, 4))
+    fig, axes = plt.subplots(1, num_layers, figsize=(4 * num_layers, 4), constrained_layout=True)
     if num_layers == 1:
         axes = [axes]
 
@@ -285,7 +325,6 @@ def plot_phase_masks(model, save_path=None, no_show=False):
 
     fig.colorbar(im, ax=axes, label="Phase (rad)", shrink=0.8)
     fig.suptitle("Learned Phase Masks", fontsize=14)
-    plt.tight_layout()
     if save_path:
         plt.savefig(save_path, dpi=150, bbox_inches="tight")
         print(f"Saved: {save_path}")
