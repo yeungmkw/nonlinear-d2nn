@@ -107,8 +107,7 @@ class D2NNCoreTests(unittest.TestCase):
         train_module = importlib.import_module("train")
         for name in (
             "classification_composite_loss",
-            "train_classification_one_epoch",
-            "evaluate_classification",
+            "_run_classification_epoch",
             "run_classification_training",
         ):
             self.assertTrue(hasattr(train_module, name), f"train missing {name}")

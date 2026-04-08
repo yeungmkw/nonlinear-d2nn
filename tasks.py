@@ -204,8 +204,6 @@ def classification_split_lengths(total_train_size, val_size=5000):
     return total_train_size - val_size, val_size
 
 
-# Classification training now lives in train.py so teacher-facing logic stays centralized.
-# Keep these wrappers only for legacy imports and plotting helpers in this module.
 def d2nn_mse_loss(output, target, num_classes=10):
     from train import d2nn_mse_loss as _impl
 
@@ -571,16 +569,16 @@ def execute_experiment_grid(grid_name, args, runner):
 
 
 def train_classification_one_epoch(model, loader, optimizer, device, alpha=1.0, beta=0.1, gamma=0.01):
-    from train import train_classification_one_epoch as _impl
+    from train import _run_classification_epoch
 
-    return _impl(model, loader, optimizer, device, alpha=alpha, beta=beta, gamma=gamma)
+    return _run_classification_epoch(model, loader, device, optimizer=optimizer, alpha=alpha, beta=beta, gamma=gamma)
 
 
 @torch.no_grad()
 def evaluate_classification(model, loader, device, alpha=1.0, beta=0.1, gamma=0.01):
-    from train import evaluate_classification as _impl
+    from train import _run_classification_epoch
 
-    return _impl(model, loader, device, alpha=alpha, beta=beta, gamma=gamma)
+    return _run_classification_epoch(model, loader, device, optimizer=None, alpha=alpha, beta=beta, gamma=gamma)
 
 
 def run_classification_training(args, device, data_dir, save_dir):
