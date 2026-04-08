@@ -19,7 +19,9 @@ from artifacts import (
     build_fabrication_readiness_summary,
     build_layer_stats,
     checkpoint_manifest_path,
+    configure_matplotlib_backend,
     derive_experiment_run_name,
+    ensure_checkpoint_version,
     checkpoint_variant_path,
     experiment_manifest_fields,
     export_height_map_to_ascii_stl,
@@ -29,27 +31,38 @@ from artifacts import (
     resolve_optics,
     save_manifest,
     write_export_report,
+    plot_phase_masks,
 )
 from d2nn import (
     CoherentAmplitudeActivation,
     CoherentPhaseActivation,
+    DetectorLayer,
     D2NN,
     D2NNImager,
+    DiffractiveNetwork,
     IdentityActivation,
     IncoherentIntensityActivation,
+    RayleighSommerfeldPropagation,
+    detector_contrast,
     field_intensity,
+    normalized_detector_logits,
     phase_to_height_map,
     safe_abs,
 )
 from train import build_parser
 from tasks import (
+    append_metric_history,
     build_classification_transform,
     build_experiment_grid,
+    build_metric_history,
     classification_split_lengths,
+    classification_composite_loss,
     d2nn_mse_loss,
     execute_experiment_grid,
     format_experiment_grid_commands,
     get_classification_dataset_config,
+    is_better_classification_checkpoint,
+    plot_classification_history,
     plot_quantization_sensitivity,
     plot_sample_output_patterns,
     resolve_activation_config,
@@ -89,6 +102,16 @@ class D2NNCoreTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, msg=f"{script_name} exited with {result.returncode}")
             self.assertIn(expected, result.stdout)
+
+    def test_train_module_exposes_classification_training_core(self):
+        train_module = importlib.import_module("train")
+        for name in (
+            "classification_composite_loss",
+            "train_classification_one_epoch",
+            "evaluate_classification",
+            "run_classification_training",
+        ):
+            self.assertTrue(hasattr(train_module, name), f"train missing {name}")
 
     def test_artifacts_module_reexports_shared_helpers(self):
         artifacts = importlib.import_module("artifacts")
@@ -145,10 +168,14 @@ class D2NNCoreTests(unittest.TestCase):
         self.assertEqual(model.detector_masks.shape, (10, 32, 32))
         self.assertTrue(torch.all(model.detector_masks.sum(dim=(-2, -1)) > 0))
 
-    def test_diffractive_layer_uses_padded_transfer_grids(self):
+    def test_diffractive_layer_uses_rs_propagation_modules(self):
         model = D2NN(**CLASSIFIER_PAPER_OPTICS.with_overrides(size=24, num_layers=2).classifier_model_kwargs())
-        self.assertEqual(model.layers[0].H.shape, (1, 48, 48))
-        self.assertEqual(model.H_out.shape, (1, 48, 48))
+        self.assertIsInstance(model.network, DiffractiveNetwork)
+        self.assertIsInstance(model.layers[0].propagation, RayleighSommerfeldPropagation)
+        self.assertIsInstance(model.network.output_propagation, RayleighSommerfeldPropagation)
+        self.assertFalse(hasattr(model.layers[0], "H"))
+        self.assertFalse(hasattr(model, "H_out"))
+        self.assertIsInstance(model.detector_layer, DetectorLayer)
 
     def test_classifier_even_detector_size_is_respected(self):
         detector_size = 4
@@ -175,6 +202,58 @@ class D2NNCoreTests(unittest.TestCase):
         self.assertEqual(field.shape, (2, 24, 24))
         self.assertEqual(intensity.shape, (2, 24, 24))
         self.assertTrue(torch.allclose(detected, model(x), atol=1e-5, rtol=1e-4))
+
+    def test_rs_plane_wave_smoke_is_nearly_uniform_in_center_crop(self):
+        propagation = RayleighSommerfeldPropagation(size=64, wavelength=0.75e-3, distance=1e-4, pixel_size=0.4e-3)
+        field = torch.ones(1, 64, 64, dtype=torch.cfloat)
+
+        propagated = propagation(field)
+        intensity = field_intensity(propagated)
+        center = intensity[:, 16:-16, 16:-16]
+        rel_std = center.std() / center.mean().clamp_min(1e-8)
+
+        self.assertLess(float(rel_std), 1e-3)
+
+    def test_normalized_detector_logits_are_based_on_relative_energy(self):
+        scores = torch.tensor([[4.0, 1.0, 1.0]], dtype=torch.float32)
+        logits = normalized_detector_logits(scores)
+        expected = torch.log(torch.tensor([[4.0, 1.0, 1.0]]) / 6.0 + 1e-8)
+        self.assertTrue(torch.allclose(logits, expected, atol=1e-6, rtol=1e-6))
+
+    def test_detector_contrast_matches_requested_formula(self):
+        scores = torch.tensor([[4.0, 1.0, 0.5], [1.0, 3.0, 2.0]], dtype=torch.float32)
+        target = torch.tensor([0, 2])
+        contrast = detector_contrast(scores, target)
+        expected = torch.tensor(
+            [
+                (4.0 - 1.0) / (4.0 + 1.0 + 1e-8),
+                (2.0 - 3.0) / (2.0 + 3.0 + 1e-8),
+            ],
+            dtype=torch.float32,
+        )
+        self.assertTrue(torch.allclose(contrast, expected, atol=1e-6, rtol=1e-6))
+
+    def test_classifier_forward_with_metrics_returns_auxiliary_outputs(self):
+        model = D2NN(**CLASSIFIER_PAPER_OPTICS.with_overrides(size=24, num_layers=2).classifier_model_kwargs())
+        x = torch.rand(2, 1, 28, 28)
+        target = torch.tensor([0, 1])
+
+        result = model.forward_with_metrics(x, target=target)
+
+        self.assertEqual(set(result.keys()), {"scores", "logits", "intensity", "contrast"})
+        self.assertEqual(result["scores"].shape, (2, 10))
+        self.assertEqual(result["logits"].shape, (2, 10))
+        self.assertEqual(result["intensity"].shape, (2, 24, 24))
+        self.assertEqual(result["contrast"].shape, (2,))
+
+    def test_classifier_forward_remains_lightweight_without_metrics_helper(self):
+        model = D2NN(**CLASSIFIER_PAPER_OPTICS.with_overrides(size=24, num_layers=2).classifier_model_kwargs())
+        x = torch.rand(2, 1, 28, 28)
+
+        with unittest.mock.patch.object(model, "forward_with_metrics", side_effect=AssertionError("do not call")):
+            output = model(x)
+
+        self.assertEqual(output.shape, (2, 10))
 
     def test_classifier_rgb_embed_input_places_channels_into_disjoint_regions(self):
         model = D2NN(**CLASSIFIER_PAPER_OPTICS.with_overrides(size=30, num_layers=2).classifier_model_kwargs())
@@ -359,15 +438,19 @@ class D2NNCoreTests(unittest.TestCase):
         state_dict["layers.0.H"] = torch.zeros(24, 24, dtype=torch.cfloat)
         state_dict["layers.1.H"] = torch.zeros(24, 24, dtype=torch.cfloat)
         state_dict["H_out"] = torch.zeros(24, 24, dtype=torch.cfloat)
-        state_dict["detector_masks"] = torch.zeros_like(state_dict["detector_masks"])
+        state_dict["detector_masks"] = torch.zeros_like(restored.detector_masks)
 
         restored.load_state_dict(state_dict, strict=True)
 
         self.assertTrue(torch.equal(restored.detector_masks, restored._build_detectors(24, 10, None)))
-        self.assertEqual(restored.layers[0].H.shape, (1, 48, 48))
-        self.assertEqual(restored.H_out.shape, (1, 48, 48))
+        self.assertIsInstance(restored.layers[0].propagation, RayleighSommerfeldPropagation)
+        self.assertIsInstance(restored.network.output_propagation, RayleighSommerfeldPropagation)
         x = torch.rand(2, 1, 28, 28)
         self.assertEqual(restored(x).shape, (2, 10))
+
+    def test_main_d2nn_module_no_longer_uses_torch_fft(self):
+        source = Path(importlib.import_module("d2nn").__file__).read_text(encoding="utf-8")
+        self.assertNotIn("torch.fft", source)
 
     def test_identity_activation_supports_backward_pass(self):
         optics = CLASSIFIER_PAPER_OPTICS.with_overrides(size=24, num_layers=2)
@@ -513,6 +596,21 @@ class D2NNCoreTests(unittest.TestCase):
         )
         self.assertIsNone(run_name)
 
+    def test_derive_experiment_run_name_encodes_loss_config_without_activation(self):
+        run_name = derive_experiment_run_name(
+            run_name=None,
+            experiment_stage="rs_only",
+            activation_type="none",
+            activation_positions=(),
+            activation_hparams={},
+            seed=42,
+            loss_config={"alpha": 1.0, "beta": 0.2, "gamma": 0.01},
+        )
+        self.assertIn("alpha-1", run_name)
+        self.assertIn("beta-0p2", run_name)
+        self.assertIn("gamma-0p01", run_name)
+        self.assertIn("seed-42", run_name)
+
     def test_derive_experiment_run_name_encodes_nonlinear_identity(self):
         run_name = derive_experiment_run_name(
             run_name=None,
@@ -556,10 +654,52 @@ class D2NNCoreTests(unittest.TestCase):
         self.assertEqual(payload["activation_positions"], [])
         self.assertEqual(payload["activation_hparams"], {})
 
+    def test_experiment_manifest_fields_include_model_version_and_loss_config(self):
+        payload = experiment_manifest_fields(
+            checkpoint_path=Path("checkpoints/best_fashion_mnist.pth"),
+            run_name="rs_only",
+            experiment_stage="baseline",
+            seed=42,
+            optics=CLASSIFIER_PAPER_OPTICS.with_overrides(size=200, num_layers=5),
+            activation_type="none",
+            activation_positions=(),
+            activation_hparams={},
+            model_version="rs_v1",
+            loss_config={"alpha": 1.0, "beta": 0.1, "gamma": 0.01},
+        )
+        self.assertEqual(payload["model_version"], "rs_v1")
+        self.assertEqual(payload["loss_config"], {"alpha": 1.0, "beta": 0.1, "gamma": 0.01})
+
+    def test_derive_experiment_run_name_keeps_canonical_baseline_for_default_loss_config(self):
+        run_name = derive_experiment_run_name(
+            experiment_stage="baseline",
+            activation_type="none",
+            seed=42,
+            loss_config={"alpha": 1.0, "beta": 0.1, "gamma": 0.01},
+        )
+        self.assertIsNone(run_name)
+
     def test_train_parser_accepts_seed_and_experiment_stage(self):
         args = build_parser().parse_args(["--seed", "7", "--experiment-stage", "placement_ablation"])
         self.assertEqual(args.seed, 7)
         self.assertEqual(args.experiment_stage, "placement_ablation")
+
+    def test_train_parser_accepts_composite_loss_arguments(self):
+        args = build_parser().parse_args(["--alpha", "1.0", "--beta", "0.1", "--gamma", "0.01"])
+        self.assertEqual(args.alpha, 1.0)
+        self.assertEqual(args.beta, 0.1)
+        self.assertEqual(args.gamma, 0.01)
+
+    def test_ensure_checkpoint_version_rejects_mismatch(self):
+        with self.assertRaisesRegex(ValueError, "expected model_version='rs_v1'"):
+            ensure_checkpoint_version({"model_version": "asm_v1"}, expected_version="rs_v1", checkpoint_path="demo.pth")
+
+    def test_ensure_checkpoint_version_accepts_match(self):
+        ensure_checkpoint_version({"model_version": "rs_v1"}, expected_version="rs_v1", checkpoint_path="demo.pth")
+
+    def test_ensure_checkpoint_version_allows_missing_manifest_when_requested(self):
+        ensure_checkpoint_version(None, expected_version="rs_v1", checkpoint_path="demo.pth", allow_missing=True)
+        ensure_checkpoint_version({}, expected_version="rs_v1", checkpoint_path="demo.pth", allow_missing=True)
 
     def test_train_parser_accepts_activation_arguments(self):
         args = build_parser().parse_args(
@@ -695,7 +835,10 @@ class D2NNCoreTests(unittest.TestCase):
         with unittest.mock.patch.object(
             tasks_module,
             "evaluate_classification",
-            side_effect=[(0.0, 50.0), RuntimeError("boom")],
+            side_effect=[
+                {"loss": 0.0, "mse": 0.0, "ce": 0.0, "reg": 0.0, "accuracy": 50.0, "contrast": 0.1},
+                RuntimeError("boom"),
+            ],
         ):
             with self.assertRaisesRegex(RuntimeError, "boom"):
                 tasks_module.plot_quantization_sensitivity(
@@ -716,6 +859,106 @@ class D2NNCoreTests(unittest.TestCase):
         self.assertEqual(resolve_experiment_seed(11, {"seed": 7}), 11)
         self.assertEqual(resolve_experiment_seed(None, {"seed": 7}), 7)
         self.assertEqual(resolve_experiment_seed(None, None), 42)
+
+    def test_classification_composite_loss_reports_all_terms(self):
+        model = D2NN(**CLASSIFIER_PAPER_OPTICS.with_overrides(size=16, num_layers=2).classifier_model_kwargs())
+        outputs = {
+            "scores": torch.tensor([[3.0, 1.0] + [0.0] * 8], dtype=torch.float32),
+            "logits": torch.log(torch.tensor([[0.75, 0.25] + [1e-8] * 8], dtype=torch.float32)),
+        }
+        target = torch.tensor([0])
+
+        terms = classification_composite_loss(outputs, target, model, alpha=1.0, beta=0.1, gamma=0.01)
+
+        self.assertEqual(set(terms.keys()), {"total", "mse", "ce", "reg"})
+        self.assertGreater(float(terms["total"].detach()), 0.0)
+        self.assertGreaterEqual(float(terms["reg"].detach()), 0.0)
+
+    def test_phase_regularizer_treats_2pi_equivalent_neighbors_as_identical(self):
+        from tasks import phase_smoothness_regularizer
+
+        model = D2NN(**CLASSIFIER_PAPER_OPTICS.with_overrides(size=4, num_layers=1).classifier_model_kwargs())
+        with torch.no_grad():
+            model.layers[0].phase.zero_()
+            model.layers[0].phase[:, 2:] = 2 * math.pi
+
+        regularizer = phase_smoothness_regularizer(model)
+
+        self.assertLess(float(regularizer.detach()), 1e-6)
+
+    def test_configure_matplotlib_backend_only_forces_agg_for_no_show(self):
+        with unittest.mock.patch("artifacts.matplotlib.use") as use_mock:
+            configure_matplotlib_backend(no_show=False)
+            use_mock.assert_not_called()
+
+        with unittest.mock.patch("artifacts.matplotlib.use") as use_mock:
+            configure_matplotlib_backend(no_show=True)
+            use_mock.assert_called_once_with("Agg", force=True)
+
+    def test_plot_phase_masks_uses_backend_helper(self):
+        model = D2NN(**CLASSIFIER_PAPER_OPTICS.with_overrides(size=8, num_layers=2).classifier_model_kwargs())
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            save_path = Path(tmpdir) / "phase_masks.png"
+            with unittest.mock.patch("artifacts.configure_matplotlib_backend", wraps=configure_matplotlib_backend) as backend_mock:
+                plot_phase_masks(model, save_path=save_path, no_show=True)
+            backend_mock.assert_called_once_with(no_show=True)
+            self.assertTrue(save_path.exists())
+
+    def test_metric_history_tracks_accuracy_and_contrast(self):
+        history = build_metric_history()
+        append_metric_history(
+            history,
+            split="train",
+            total=1.2,
+            mse=1.0,
+            ce=0.1,
+            reg=0.1,
+            accuracy=87.5,
+            contrast=0.4,
+        )
+        self.assertEqual(history["train"]["accuracy"], [87.5])
+        self.assertEqual(history["train"]["contrast"], [0.4])
+        self.assertEqual(history["train"]["loss"], [1.2])
+
+    def test_plot_classification_history_writes_accuracy_and_contrast_figure(self):
+        history = build_metric_history()
+        append_metric_history(
+            history,
+            split="train",
+            total=1.2,
+            mse=1.0,
+            ce=0.1,
+            reg=0.1,
+            accuracy=87.5,
+            contrast=0.4,
+        )
+        append_metric_history(
+            history,
+            split="val",
+            total=1.0,
+            mse=0.8,
+            ce=0.1,
+            reg=0.1,
+            accuracy=89.0,
+            contrast=0.5,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            save_path = Path(tmpdir) / "classification_history.png"
+            plot_classification_history(history, save_path=save_path, no_show=True)
+            self.assertTrue(save_path.exists())
+            self.assertGreater(save_path.stat().st_size, 0)
+
+    def test_checkpoint_selection_prefers_accuracy_then_contrast_then_later_epoch(self):
+        best = {"accuracy": 90.0, "contrast": 0.3, "epoch": 4}
+        better_contrast = {"accuracy": 90.0, "contrast": 0.4, "epoch": 3}
+        later_tie = {"accuracy": 90.0, "contrast": 0.4, "epoch": 5}
+        worse = {"accuracy": 89.0, "contrast": 0.9, "epoch": 99}
+
+        self.assertTrue(is_better_classification_checkpoint(better_contrast, best))
+        self.assertTrue(is_better_classification_checkpoint(later_tie, better_contrast))
+        self.assertFalse(is_better_classification_checkpoint(worse, later_tie))
 
     def test_resolve_activation_config_prefers_args_then_manifest_then_defaults(self):
         parser = build_parser()
@@ -1014,6 +1257,12 @@ class D2NNCoreTests(unittest.TestCase):
                 "fashion-mnist",
                 "--layers",
                 "5",
+                "--alpha",
+                "1.0",
+                "--beta",
+                "0.1",
+                "--gamma",
+                "0.01",
             ]
         )
         commands = format_experiment_grid_commands("coherent_amplitude_positions", args)
@@ -1021,6 +1270,9 @@ class D2NNCoreTests(unittest.TestCase):
         self.assertIn("python train.py", commands[0])
         self.assertIn("--activation-placement front", commands[0])
         self.assertIn("--activation-preset balanced", commands[0])
+        self.assertIn("--alpha 1.0", commands[0])
+        self.assertIn("--beta 0.1", commands[0])
+        self.assertIn("--gamma 0.01", commands[0])
 
     def test_format_experiment_grid_commands_renders_phase_and_mechanism_variants(self):
         parser = build_parser()

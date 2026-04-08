@@ -21,62 +21,19 @@ def safe_abs(u, eps=1e-8):
     return torch.sqrt(field_intensity(u) + eps)
 
 
-def padded_grid_size(size):
-    """Use a doubled simulation grid to approximate linear convolution."""
-    return 2 * size
+def normalized_detector_logits(scores, eps=1e-8):
+    """Convert detector scores into CE-compatible logits based on relative energy."""
+    normalized = scores / scores.sum(dim=1, keepdim=True).clamp_min(eps)
+    return torch.log(normalized.clamp_min(eps))
 
 
-def build_transfer_function(size, wavelength, layer_distance, pixel_size):
-    """Build a batched ASM transfer function on the requested simulation grid."""
-    fx = torch.fft.fftfreq(size, d=pixel_size)
-    fy = torch.fft.fftfreq(size, d=pixel_size)
-    FX, FY = torch.meshgrid(fx, fy, indexing="ij")
-
-    sq = (1.0 / wavelength) ** 2 - FX**2 - FY**2
-    propagating = sq > 0
-    kz = torch.sqrt(torch.clamp(sq, min=0))
-    return (torch.exp(1j * 2 * np.pi * kz * layer_distance) * propagating).unsqueeze(0)
-
-
-def _pad_complex_field(u, target_size):
-    """Zero-pad the last two spatial dimensions to the requested square size."""
-    current_size = u.shape[-1]
-    if current_size == target_size:
-        return u
-    if current_size > target_size:
-        raise ValueError(f"Cannot pad from size {current_size} down to smaller target size {target_size}")
-
-    pad_total = target_size - current_size
-    pad_before = pad_total // 2
-    pad_after = pad_total - pad_before
-
-    padded = torch.zeros(*u.shape[:-2], target_size, target_size, dtype=u.dtype, device=u.device)
-    padded[..., pad_before : target_size - pad_after, pad_before : target_size - pad_after] = u
-    return padded
-
-
-def _crop_center(u, target_size):
-    """Crop the centered square window from the last two spatial dimensions."""
-    current_size = u.shape[-1]
-    if current_size == target_size:
-        return u
-    if current_size < target_size:
-        raise ValueError(f"Cannot crop from size {current_size} up to larger target size {target_size}")
-
-    start = (current_size - target_size) // 2
-    end = start + target_size
-    return u[..., start:end, start:end]
-
-
-def propagate_with_transfer(u, transfer_function):
-    """Propagate on the padded grid and crop back to the original field size."""
-    if transfer_function.ndim == 2:
-        transfer_function = transfer_function.unsqueeze(0)
-
-    padded = _pad_complex_field(u, transfer_function.shape[-1])
-    spectrum = torch.fft.fft2(padded)
-    propagated = torch.fft.ifft2(spectrum * transfer_function)
-    return _crop_center(propagated, u.shape[-1])
+def detector_contrast(scores, target, eps=1e-8):
+    """Target-vs-strongest-other detector contrast in (-1, 1)."""
+    target_energy = scores.gather(1, target.view(-1, 1)).squeeze(1)
+    masked_scores = scores.clone()
+    masked_scores.scatter_(1, target.view(-1, 1), float("-inf"))
+    max_other = masked_scores.max(dim=1).values
+    return (target_energy - max_other) / (target_energy + max_other + eps)
 
 
 def _discard_state_dict_key_compatibility(missing_keys, unexpected_keys, key):
@@ -151,18 +108,6 @@ def phase_to_height_map(phase_masks, wavelength, refractive_index, ambient_index
     if delta_n <= 0:
         raise ValueError("refractive_index must be greater than ambient_index")
     return phase_masks * wavelength / (2 * np.pi * delta_n)
-
-
-def propagate_output_field(u, layers, transfer_function, activations=None):
-    """Propagate a complex field through diffractive layers to the output plane."""
-    for layer_idx, layer in enumerate(layers, start=1):
-        u = layer(u)
-        if activations is not None:
-            key = str(layer_idx)
-            if key in activations:
-                u = activations[key](u)
-
-    return propagate_with_transfer(u, transfer_function)
 
 
 class FieldActivationBase(nn.Module):
@@ -296,22 +241,73 @@ def build_activation_module(activation_type, activation_hparams=None):
     raise ValueError(f"Unsupported activation type: {activation_type}")
 
 
+class RayleighSommerfeldPropagation(nn.Module):
+    """Direct-space Rayleigh-Sommerfeld propagation with chunked kernel evaluation."""
+
+    def __init__(self, size, wavelength, distance, pixel_size, chunk_size=None):
+        super().__init__()
+        self.size = int(size)
+        self.wavelength = float(wavelength)
+        self.distance = float(distance)
+        self.pixel_size = float(pixel_size)
+        self.chunk_size = int(chunk_size) if chunk_size is not None else self._default_chunk_size(self.size)
+
+        coords = (torch.arange(self.size, dtype=torch.float32) - (self.size - 1) / 2.0) * self.pixel_size
+        grid_y, grid_x = torch.meshgrid(coords, coords, indexing="ij")
+        points = torch.stack((grid_x.reshape(-1), grid_y.reshape(-1)), dim=1)
+        self.register_buffer("source_points", points, persistent=False)
+        self.register_buffer("target_points", points.clone(), persistent=False)
+
+    @staticmethod
+    def _default_chunk_size(size):
+        if size <= 24:
+            return size * size
+        if size <= 64:
+            return 256
+        return 64
+
+    def _kernel_chunk(self, target_points, dtype):
+        source_points = self.source_points.to(device=target_points.device, dtype=target_points.dtype)
+        dx = target_points[:, None, 0] - source_points[None, :, 0]
+        dy = target_points[:, None, 1] - source_points[None, :, 1]
+        r2 = dx.square() + dy.square() + self.distance**2
+        r = torch.sqrt(r2.clamp_min(1e-12))
+        phase = torch.exp(1j * (2 * np.pi / self.wavelength) * r)
+        kernel = (-1j * (self.pixel_size**2 / self.wavelength)) * (self.distance / r2) * phase
+        return kernel.to(dtype=dtype)
+
+    def forward(self, u):
+        batch, height, width = u.shape
+        if height != self.size or width != self.size:
+            raise ValueError(f"Expected a {self.size}x{self.size} field, got {height}x{width}")
+
+        flat_field = u.reshape(batch, -1)
+        outputs = []
+        for start in range(0, self.target_points.shape[0], self.chunk_size):
+            end = min(start + self.chunk_size, self.target_points.shape[0])
+            kernel = self._kernel_chunk(self.target_points[start:end], dtype=u.dtype)
+            outputs.append(flat_field @ kernel.transpose(0, 1))
+        return torch.cat(outputs, dim=1).reshape(batch, self.size, self.size)
+
+
 class DiffractiveLayer(nn.Module):
     """Single diffractive layer with learnable phase modulation."""
 
-    def __init__(self, size, wavelength, layer_distance, pixel_size):
+    def __init__(self, size, wavelength, layer_distance, pixel_size, propagation_chunk_size=None):
         super().__init__()
-        self.size = size
-        self.padded_size = padded_grid_size(size)
-        self.wavelength = wavelength
-        self.layer_distance = layer_distance
-        self.pixel_size = pixel_size
+        self.size = int(size)
+        self.wavelength = float(wavelength)
+        self.layer_distance = float(layer_distance)
+        self.pixel_size = float(pixel_size)
 
         self.phase = nn.Parameter(torch.randn(size, size) * 0.05)
-        self.register_buffer("H", self._build_transfer_function())
-
-    def _build_transfer_function(self):
-        return build_transfer_function(self.padded_size, self.wavelength, self.layer_distance, self.pixel_size)
+        self.propagation = RayleighSommerfeldPropagation(
+            size=size,
+            wavelength=wavelength,
+            distance=layer_distance,
+            pixel_size=pixel_size,
+            chunk_size=propagation_chunk_size,
+        )
 
     def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
         key = f"{prefix}H"
@@ -322,7 +318,74 @@ class DiffractiveLayer(nn.Module):
     def forward(self, u):
         modulation = torch.exp(1j * self.phase)
         u = u * modulation.unsqueeze(0)
-        return propagate_with_transfer(u, self.H)
+        return self.propagation(u)
+
+
+class DiffractiveNetwork:
+    """Applies diffractive layers, optional activations, then a final free-space propagation."""
+
+    def __init__(self, layers, output_propagation, activations=None):
+        self.layers = layers
+        self.output_propagation = output_propagation
+        self.activations = activations if activations is not None else {}
+
+    def __call__(self, u):
+        for layer_idx, layer in enumerate(self.layers, start=1):
+            u = layer(u)
+            key = str(layer_idx)
+            if key in self.activations:
+                u = self.activations[key](u)
+        return self.output_propagation(u)
+
+
+class DetectorLayer(nn.Module):
+    """Maps output-plane intensity to detector energies and contrast/logit diagnostics."""
+
+    def __init__(self, size, num_classes, detector_size=None):
+        super().__init__()
+        self.size = int(size)
+        self.num_classes = int(num_classes)
+        self.detector_size = detector_size
+        self.register_buffer(
+            "masks",
+            self.build_detector_masks(size=size, num_classes=num_classes, detector_size=detector_size),
+            persistent=False,
+        )
+
+    @staticmethod
+    def build_detector_masks(size, num_classes, detector_size=None):
+        if detector_size is None:
+            detector_size = max(size // 15, 3)
+
+        masks = torch.zeros(num_classes, size, size)
+        center = size // 2
+        radius = size // 4
+
+        for index in range(num_classes):
+            angle = 2 * np.pi * index / num_classes - np.pi / 2
+            cx = int(center + radius * np.cos(angle))
+            cy = int(center + radius * np.sin(angle))
+            half_low = detector_size // 2
+            half_high = detector_size - half_low
+            x_start = max(cx - half_low, 0)
+            x_end = min(cx + half_high, size)
+            y_start = max(cy - half_low, 0)
+            y_end = min(cy + half_high, size)
+            masks[index, x_start:x_end, y_start:y_end] = 1.0
+
+        return masks
+
+    def forward(self, intensity):
+        batch = intensity.shape[0]
+        flat_intensity = intensity.reshape(batch, -1)
+        flat_masks = self.masks.reshape(self.num_classes, -1).to(dtype=intensity.dtype)
+        return flat_intensity @ flat_masks.transpose(0, 1)
+
+    def logits(self, scores, eps=1e-8):
+        return normalized_detector_logits(scores, eps=eps)
+
+    def contrast(self, scores, target, eps=1e-8):
+        return detector_contrast(scores, target, eps=eps)
 
 
 class D2NNBase(nn.Module):
@@ -338,6 +401,7 @@ class D2NNBase(nn.Module):
         activation_type="none",
         activation_positions=None,
         activation_hparams=None,
+        propagation_chunk_size=None,
     ):
         super().__init__()
         self.size = size
@@ -346,7 +410,16 @@ class D2NNBase(nn.Module):
         self.activation_hparams = dict(activation_hparams or {})
 
         self.layers = nn.ModuleList(
-            [DiffractiveLayer(size, wavelength, layer_distance, pixel_size) for _ in range(num_layers)]
+            [
+                DiffractiveLayer(
+                    size,
+                    wavelength,
+                    layer_distance,
+                    pixel_size,
+                    propagation_chunk_size=propagation_chunk_size,
+                )
+                for _ in range(num_layers)
+            ]
         )
         self.activations = nn.ModuleDict()
         if self.activation_type != "none":
@@ -354,10 +427,14 @@ class D2NNBase(nn.Module):
                 activation = build_activation_module(self.activation_type, self.activation_hparams)
                 if activation is not None:
                     self.activations[str(position)] = activation
-
-    @staticmethod
-    def _build_output_transfer(size, wavelength, layer_distance, pixel_size):
-        return build_transfer_function(padded_grid_size(size), wavelength, layer_distance, pixel_size)
+        self.output_propagation = RayleighSommerfeldPropagation(
+            size=size,
+            wavelength=wavelength,
+            distance=layer_distance,
+            pixel_size=pixel_size,
+            chunk_size=propagation_chunk_size,
+        )
+        self.network = DiffractiveNetwork(self.layers, self.output_propagation, self.activations)
 
     def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
         key = f"{prefix}H_out"
@@ -366,7 +443,7 @@ class D2NNBase(nn.Module):
         _discard_state_dict_key_compatibility(missing_keys, unexpected_keys, key)
 
     def propagate_embedded_field(self, u):
-        return propagate_output_field(u, self.layers, self.H_out, self.activations)
+        return self.network(u)
 
     def propagate_field(self, x):
         return self.propagate_embedded_field(self._embed_input(x))
@@ -403,6 +480,7 @@ class D2NN(D2NNBase):
         activation_type="none",
         activation_positions=None,
         activation_hparams=None,
+        propagation_chunk_size=None,
     ):
         super().__init__(
             num_layers=num_layers,
@@ -413,37 +491,12 @@ class D2NN(D2NNBase):
             activation_type=activation_type,
             activation_positions=activation_positions,
             activation_hparams=activation_hparams,
+            propagation_chunk_size=propagation_chunk_size,
         )
         self.num_classes = num_classes
+        self.detector_layer = DetectorLayer(size=size, num_classes=num_classes, detector_size=detector_size)
 
-        self.register_buffer(
-            "H_out",
-            self._build_output_transfer(size, wavelength, layer_distance, pixel_size),
-        )
-        self.register_buffer("detector_masks", self._build_detectors(size, num_classes, detector_size))
-
-    @staticmethod
-    def _build_detectors(size, num_classes, detector_size=None):
-        if detector_size is None:
-            detector_size = max(size // 15, 3)
-
-        masks = torch.zeros(num_classes, size, size)
-        center = size // 2
-        radius = size // 4
-
-        for i in range(num_classes):
-            angle = 2 * np.pi * i / num_classes - np.pi / 2
-            cx = int(center + radius * np.cos(angle))
-            cy = int(center + radius * np.sin(angle))
-            half_low = detector_size // 2
-            half_high = detector_size - half_low
-            x_start = max(cx - half_low, 0)
-            x_end = min(cx + half_high, size)
-            y_start = max(cy - half_low, 0)
-            y_end = min(cy + half_high, size)
-            masks[i, x_start:x_end, y_start:y_end] = 1.0
-
-        return masks
+    _build_detectors = staticmethod(DetectorLayer.build_detector_masks)
 
     def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
         key = f"{prefix}detector_masks"
@@ -452,15 +505,27 @@ class D2NN(D2NNBase):
         _discard_state_dict_key_compatibility(missing_keys, unexpected_keys, key)
 
     def forward(self, x):
-        return self.detect_from_intensity(self.output_intensity(x))
+        intensity = self.output_intensity(x)
+        return self.detect_from_intensity(intensity)
+
+    def forward_with_metrics(self, x, target=None):
+        intensity = self.output_intensity(x)
+        scores = self.detect_from_intensity(intensity)
+        result = {
+            "scores": scores,
+            "logits": self.detector_layer.logits(scores),
+            "intensity": intensity,
+        }
+        if target is not None:
+            result["contrast"] = self.detector_layer.contrast(scores, target)
+        return result
 
     def detect_from_intensity(self, intensity):
-        batch = intensity.shape[0]
-        class_intensities = torch.zeros(batch, self.num_classes, device=intensity.device)
-        for i in range(self.num_classes):
-            mask = self.detector_masks[i]
-            class_intensities[:, i] = (intensity * mask.unsqueeze(0)).sum(dim=(-2, -1))
-        return class_intensities
+        return self.detector_layer(intensity)
+
+    @property
+    def detector_masks(self):
+        return self.detector_layer.masks
 
     def _embed_input(self, x):
         channels = x.shape[1]
@@ -485,6 +550,7 @@ class D2NNImager(D2NNBase):
         activation_type="none",
         activation_positions=None,
         activation_hparams=None,
+        propagation_chunk_size=None,
     ):
         super().__init__(
             num_layers=num_layers,
@@ -495,13 +561,9 @@ class D2NNImager(D2NNBase):
             activation_type=activation_type,
             activation_positions=activation_positions,
             activation_hparams=activation_hparams,
+            propagation_chunk_size=propagation_chunk_size,
         )
         self.input_fraction = input_fraction
-
-        self.register_buffer(
-            "H_out",
-            self._build_output_transfer(size, wavelength, layer_distance, pixel_size),
-        )
 
     def forward(self, x):
         intensity = self.output_intensity(x)
