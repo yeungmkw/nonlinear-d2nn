@@ -1,0 +1,243 @@
+[
+  {
+    "label": "mnist_phase_only",
+    "dataset": "MNIST",
+    "checkpoint": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn_artifact_archive\\2026-04-09-pre-rs\\checkpoints\\best_mnist.pth",
+    "run_name": null,
+    "experiment_stage": null,
+    "archived_manifest_model_version": null,
+    "activation_type": "none",
+    "activation_positions": [],
+    "test_accuracy": 34.92,
+    "mean_test_contrast": -0.12207763595581055,
+    "mean_score_margin": 0.004950935930013656,
+    "num_test_samples": 10000,
+    "figure_dir": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn\\figures\\post_rs_eval\\2026-04-09\\mnist_phase_only"
+  },
+  {
+    "label": "fashion_phase_only",
+    "dataset": "Fashion-MNIST",
+    "checkpoint": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn_artifact_archive\\2026-04-09-pre-rs\\checkpoints\\best_fashion_mnist.pth",
+    "run_name": null,
+    "experiment_stage": null,
+    "archived_manifest_model_version": null,
+    "activation_type": "none",
+    "activation_positions": [],
+    "test_accuracy": 69.32,
+    "mean_test_contrast": 0.11716029250621796,
+    "mean_score_margin": 3.0878003601074218,
+    "num_test_samples": 10000,
+    "figure_dir": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn\\figures\\post_rs_eval\\2026-04-09\\fashion_phase_only"
+  },
+  {
+    "label": "fashion_incoherent_back_seed42",
+    "dataset": "Fashion-MNIST",
+    "checkpoint": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn_artifact_archive\\2026-04-09-pre-rs\\checkpoints\\best_fashion_mnist.incoherent_back_20ep.pth",
+    "run_name": "incoherent_back_20ep",
+    "experiment_stage": "placement_ablation",
+    "archived_manifest_model_version": null,
+    "activation_type": "incoherent_intensity",
+    "activation_positions": [
+      5
+    ],
+    "test_accuracy": 43.89,
+    "mean_test_contrast": 0.023420472919940948,
+    "mean_score_margin": 0.023564293372631072,
+    "num_test_samples": 10000,
+    "figure_dir": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn\\figures\\post_rs_eval\\2026-04-09\\fashion_incoherent_back_seed42"
+  },
+  {
+    "label": "fashion_incoherent_back_seed7",
+    "dataset": "Fashion-MNIST",
+    "checkpoint": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn_artifact_archive\\2026-04-09-pre-rs\\checkpoints\\best_fashion_mnist.incoherent_back_20ep_seed7.pth",
+    "run_name": "incoherent_back_20ep_seed7",
+    "experiment_stage": "placement_ablation",
+    "archived_manifest_model_version": null,
+    "activation_type": "incoherent_intensity",
+    "activation_positions": [
+      5
+    ],
+    "test_accuracy": 48.95,
+    "mean_test_contrast": 0.08143855935335159,
+    "mean_score_margin": 0.025959751361608507,
+    "num_test_samples": 10000,
+    "figure_dir": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn\\figures\\post_rs_eval\\2026-04-09\\fashion_incoherent_back_seed7"
+  },
+  {
+    "label": "fashion_incoherent_back_seed123",
+    "dataset": "Fashion-MNIST",
+    "checkpoint": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn_artifact_archive\\2026-04-09-pre-rs\\checkpoints\\best_fashion_mnist.incoherent_back_20ep_seed123.pth",
+    "run_name": "incoherent_back_20ep_seed123",
+    "experiment_stage": "placement_ablation",
+    "archived_manifest_model_version": null,
+    "activation_type": "incoherent_intensity",
+    "activation_positions": [
+      5
+    ],
+    "test_accuracy": 51.02,
+    "mean_test_contrast": 0.09010801178216934,
+    "mean_score_margin": 0.02228665763139725,
+    "num_test_samples": 10000,
+    "figure_dir": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn\\figures\\post_rs_eval\\2026-04-09\\fashion_incoherent_back_seed123"
+  },
+  {
+    "label": "cifar10_gray_baseline_seed42",
+    "dataset": "CIFAR-10 (grayscale)",
+    "checkpoint": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn_artifact_archive\\2026-04-09-pre-rs\\checkpoints\\best_cifar10_gray.cifar10_gray_baseline_10ep.pth",
+    "run_name": "cifar10_gray_baseline_10ep",
+    "experiment_stage": "cifar10-gray-baseline",
+    "archived_manifest_model_version": null,
+    "activation_type": "none",
+    "activation_positions": [],
+    "test_accuracy": 26.05,
+    "mean_test_contrast": -0.2015193346261978,
+    "mean_score_margin": 0.8590669528961181,
+    "num_test_samples": 10000,
+    "figure_dir": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn\\figures\\post_rs_eval\\2026-04-09\\cifar10_gray_baseline_seed42"
+  },
+  {
+    "label": "cifar10_gray_baseline_seed7",
+    "dataset": "CIFAR-10 (grayscale)",
+    "checkpoint": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn_artifact_archive\\2026-04-09-pre-rs\\checkpoints\\best_cifar10_gray.cifar10_gray_baseline_10ep_seed7.pth",
+    "run_name": "cifar10_gray_baseline_10ep_seed7",
+    "experiment_stage": "cifar10-gray-baseline",
+    "archived_manifest_model_version": null,
+    "activation_type": "none",
+    "activation_positions": [],
+    "test_accuracy": 24.79,
+    "mean_test_contrast": -0.19452918412685394,
+    "mean_score_margin": 0.7164899341583252,
+    "num_test_samples": 10000,
+    "figure_dir": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn\\figures\\post_rs_eval\\2026-04-09\\cifar10_gray_baseline_seed7"
+  },
+  {
+    "label": "cifar10_gray_incoherent_back_seed42",
+    "dataset": "CIFAR-10 (grayscale)",
+    "checkpoint": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn_artifact_archive\\2026-04-09-pre-rs\\checkpoints\\best_cifar10_gray.stage-cifar10-gray-nonlinear-act-incoherent-intensity-pos-5-threshold-0p1-responsivity-1-emission-phase-mode-zero-seed-42.pth",
+    "run_name": "stage-cifar10-gray-nonlinear__act-incoherent-intensity__pos-5__threshold-0p1__responsivity-1__emission-phase-mode-zero__seed-42",
+    "experiment_stage": "cifar10-gray-nonlinear",
+    "archived_manifest_model_version": null,
+    "activation_type": "incoherent_intensity",
+    "activation_positions": [
+      5
+    ],
+    "test_accuracy": 23.45,
+    "mean_test_contrast": -0.255025577044487,
+    "mean_score_margin": 0.021493878889083863,
+    "num_test_samples": 10000,
+    "figure_dir": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn\\figures\\post_rs_eval\\2026-04-09\\cifar10_gray_incoherent_back_seed42"
+  },
+  {
+    "label": "cifar10_gray_incoherent_back_seed7",
+    "dataset": "CIFAR-10 (grayscale)",
+    "checkpoint": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn_artifact_archive\\2026-04-09-pre-rs\\checkpoints\\best_cifar10_gray.cifar10_gray_incoherent_back_10ep_seed7.pth",
+    "run_name": "cifar10_gray_incoherent_back_10ep_seed7",
+    "experiment_stage": "cifar10-gray-nonlinear",
+    "archived_manifest_model_version": null,
+    "activation_type": "incoherent_intensity",
+    "activation_positions": [
+      5
+    ],
+    "test_accuracy": 22.68,
+    "mean_test_contrast": -0.26916526041030886,
+    "mean_score_margin": 0.021971898192167282,
+    "num_test_samples": 10000,
+    "figure_dir": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn\\figures\\post_rs_eval\\2026-04-09\\cifar10_gray_incoherent_back_seed7"
+  },
+  {
+    "label": "cifar10_rgb_baseline_seed42",
+    "dataset": "CIFAR-10 (RGB)",
+    "checkpoint": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn_artifact_archive\\2026-04-09-pre-rs\\checkpoints\\best_cifar10_rgb.cifar10_rgb_baseline_20ep_seed42.pth",
+    "run_name": "cifar10_rgb_baseline_20ep_seed42",
+    "experiment_stage": "cifar10-rgb-budget-exit",
+    "archived_manifest_model_version": null,
+    "activation_type": "none",
+    "activation_positions": [],
+    "test_accuracy": 35.53,
+    "mean_test_contrast": -0.1140527274608612,
+    "mean_score_margin": 0.0631186936557293,
+    "num_test_samples": 10000,
+    "figure_dir": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn\\figures\\post_rs_eval\\2026-04-09\\cifar10_rgb_baseline_seed42"
+  },
+  {
+    "label": "cifar10_rgb_baseline_seed7",
+    "dataset": "CIFAR-10 (RGB)",
+    "checkpoint": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn_artifact_archive\\2026-04-09-pre-rs\\checkpoints\\best_cifar10_rgb.cifar10_rgb_baseline_20ep_seed7.pth",
+    "run_name": "cifar10_rgb_baseline_20ep_seed7",
+    "experiment_stage": "cifar10-rgb-budget-exit",
+    "archived_manifest_model_version": null,
+    "activation_type": "none",
+    "activation_positions": [],
+    "test_accuracy": 32.85,
+    "mean_test_contrast": -0.13181975495815276,
+    "mean_score_margin": 0.07507799943089485,
+    "num_test_samples": 10000,
+    "figure_dir": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn\\figures\\post_rs_eval\\2026-04-09\\cifar10_rgb_baseline_seed7"
+  },
+  {
+    "label": "cifar10_rgb_baseline_seed123",
+    "dataset": "CIFAR-10 (RGB)",
+    "checkpoint": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn_artifact_archive\\2026-04-09-pre-rs\\checkpoints\\best_cifar10_rgb.cifar10_rgb_baseline_20ep_seed123.pth",
+    "run_name": "cifar10_rgb_baseline_20ep_seed123",
+    "experiment_stage": "cifar10-rgb-budget-exit",
+    "archived_manifest_model_version": null,
+    "activation_type": "none",
+    "activation_positions": [],
+    "test_accuracy": 34.65,
+    "mean_test_contrast": -0.11302759206295013,
+    "mean_score_margin": 0.06818230892419815,
+    "num_test_samples": 10000,
+    "figure_dir": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn\\figures\\post_rs_eval\\2026-04-09\\cifar10_rgb_baseline_seed123"
+  },
+  {
+    "label": "cifar10_rgb_incoherent_back_seed42",
+    "dataset": "CIFAR-10 (RGB)",
+    "checkpoint": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn_artifact_archive\\2026-04-09-pre-rs\\checkpoints\\best_cifar10_rgb.cifar10_rgb_incoherent_back_20ep_seed42.pth",
+    "run_name": "cifar10_rgb_incoherent_back_20ep_seed42",
+    "experiment_stage": "cifar10-rgb-budget-exit",
+    "archived_manifest_model_version": null,
+    "activation_type": "incoherent_intensity",
+    "activation_positions": [
+      5
+    ],
+    "test_accuracy": 17.05,
+    "mean_test_contrast": -0.40778035669326784,
+    "mean_score_margin": 0.0011769682181999087,
+    "num_test_samples": 10000,
+    "figure_dir": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn\\figures\\post_rs_eval\\2026-04-09\\cifar10_rgb_incoherent_back_seed42"
+  },
+  {
+    "label": "cifar10_rgb_incoherent_back_seed7",
+    "dataset": "CIFAR-10 (RGB)",
+    "checkpoint": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn_artifact_archive\\2026-04-09-pre-rs\\checkpoints\\best_cifar10_rgb.cifar10_rgb_incoherent_back_20ep_seed7.pth",
+    "run_name": "cifar10_rgb_incoherent_back_20ep_seed7",
+    "experiment_stage": "cifar10-rgb-budget-exit",
+    "archived_manifest_model_version": null,
+    "activation_type": "incoherent_intensity",
+    "activation_positions": [
+      5
+    ],
+    "test_accuracy": 20.33,
+    "mean_test_contrast": -0.26965644903182984,
+    "mean_score_margin": 0.0005381935769226402,
+    "num_test_samples": 10000,
+    "figure_dir": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn\\figures\\post_rs_eval\\2026-04-09\\cifar10_rgb_incoherent_back_seed7"
+  },
+  {
+    "label": "cifar10_rgb_incoherent_back_seed123",
+    "dataset": "CIFAR-10 (RGB)",
+    "checkpoint": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn_artifact_archive\\2026-04-09-pre-rs\\checkpoints\\best_cifar10_rgb.cifar10_rgb_incoherent_back_20ep_seed123.pth",
+    "run_name": "cifar10_rgb_incoherent_back_20ep_seed123",
+    "experiment_stage": "cifar10-rgb-budget-exit",
+    "archived_manifest_model_version": null,
+    "activation_type": "incoherent_intensity",
+    "activation_positions": [
+      5
+    ],
+    "test_accuracy": 16.64,
+    "mean_test_contrast": -0.3711352423667908,
+    "mean_score_margin": 0.0010138261370360852,
+    "num_test_samples": 10000,
+    "figure_dir": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn\\figures\\post_rs_eval\\2026-04-09\\cifar10_rgb_incoherent_back_seed123"
+  }
+]

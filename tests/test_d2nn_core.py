@@ -76,10 +76,10 @@ class D2NNCoreTests(unittest.TestCase):
         readme = Path(__file__).resolve().parents[1] / "README.md"
         content = readme.read_text(encoding="utf-8")
         for section in (
-            "## Features",
+            "## Overview",
             "## Quick Start",
-            "## Project Structure",
-            "## Known Limitations & Scope",
+            "## Project Layout",
+            "## Limitations",
             "## References",
         ):
             self.assertIn(section, content)
@@ -102,6 +102,35 @@ class D2NNCoreTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, msg=f"{script_name} exited with {result.returncode}")
             self.assertIn(expected, result.stdout)
+
+    def test_train_parser_accepts_rs_acceleration_flags(self):
+        args = build_parser().parse_args(
+            [
+                "--rs-backend",
+                "fft",
+                "--propagation-chunk-size",
+                "128",
+                "--allow-tf32",
+                "--num-workers",
+                "2",
+                "--pin-memory",
+                "--prefetch-factor",
+                "4",
+            ]
+        )
+        self.assertEqual(args.rs_backend, "fft")
+        self.assertEqual(args.propagation_chunk_size, 128)
+        self.assertTrue(args.allow_tf32)
+        self.assertEqual(args.num_workers, 2)
+        self.assertTrue(args.pin_memory)
+        self.assertEqual(args.prefetch_factor, 4)
+
+    def test_visualize_parser_accepts_rs_override_flags(self):
+        args = build_visualize_parser().parse_args(
+            ["--checkpoint", "checkpoints/demo.pth", "--rs-backend", "fft", "--propagation-chunk-size", "96"]
+        )
+        self.assertEqual(args.rs_backend, "fft")
+        self.assertEqual(args.propagation_chunk_size, 96)
 
     def test_train_module_exposes_classification_training_core(self):
         train_module = importlib.import_module("train")
@@ -176,6 +205,53 @@ class D2NNCoreTests(unittest.TestCase):
         self.assertFalse(hasattr(model, "H_out"))
         self.assertIsInstance(model.detector_layer, DetectorLayer)
 
+    def test_d2nn_accepts_fft_propagation_backend(self):
+        model = D2NN(
+            **CLASSIFIER_PAPER_OPTICS.with_overrides(size=24, num_layers=2).classifier_model_kwargs(),
+            propagation_backend="fft",
+            propagation_chunk_size=128,
+        )
+        self.assertEqual(model.layers[0].propagation.backend, "fft")
+        self.assertEqual(model.output_propagation.backend, "fft")
+        self.assertEqual(model.layers[0].propagation.chunk_size, 128)
+
+    def test_diffractive_layer_checkpoints_propagation_during_training(self):
+        import d2nn as d2nn_module
+
+        layer = D2NN(**CLASSIFIER_PAPER_OPTICS.with_overrides(size=16, num_layers=1).classifier_model_kwargs()).layers[0]
+        x = torch.ones(1, 16, 16, dtype=torch.cfloat, requires_grad=True)
+
+        with unittest.mock.patch.object(
+            d2nn_module,
+            "activation_checkpoint",
+            side_effect=lambda fn, tensor, use_reentrant=False: fn(tensor),
+        ) as checkpoint_mock:
+            loss = layer(x).real.sum()
+            loss.backward()
+
+        checkpoint_mock.assert_called_once()
+
+    def test_diffractive_network_checkpoints_output_propagation_during_training(self):
+        import d2nn as d2nn_module
+
+        class IdentityPropagation(torch.nn.Module):
+            def forward(self, u):
+                return u
+
+        output_propagation = IdentityPropagation()
+        network = DiffractiveNetwork(layers=[], output_propagation=output_propagation, activations={})
+        x = torch.ones(1, 8, 8, dtype=torch.cfloat, requires_grad=True)
+
+        with unittest.mock.patch.object(
+            d2nn_module,
+            "activation_checkpoint",
+            side_effect=lambda fn, tensor, use_reentrant=False: fn(tensor),
+        ) as checkpoint_mock:
+            loss = network(x).real.sum()
+            loss.backward()
+
+        checkpoint_mock.assert_called_once()
+
     def test_classifier_even_detector_size_is_respected(self):
         detector_size = 4
         masks = D2NN._build_detectors(size=32, num_classes=1, detector_size=detector_size)
@@ -212,6 +288,22 @@ class D2NNCoreTests(unittest.TestCase):
         rel_std = center.std() / center.mean().clamp_min(1e-8)
 
         self.assertLess(float(rel_std), 1e-3)
+
+    def test_rs_fft_backend_matches_direct_backend_on_small_grid(self):
+        kwargs = {
+            "size": 10,
+            "wavelength": 0.75e-3,
+            "distance": 0.8e-3,
+            "pixel_size": 0.4e-3,
+        }
+        direct = RayleighSommerfeldPropagation(**kwargs, chunk_size=16, backend="direct")
+        fft = RayleighSommerfeldPropagation(**kwargs, backend="fft")
+        field = torch.randn(2, 10, 10, dtype=torch.cfloat)
+
+        direct_out = direct(field)
+        fft_out = fft(field)
+
+        self.assertTrue(torch.allclose(fft_out, direct_out, atol=1e-4, rtol=1e-4))
 
     def test_normalized_detector_logits_are_based_on_relative_energy(self):
         scores = torch.tensor([[4.0, 1.0, 1.0]], dtype=torch.float32)
@@ -447,9 +539,10 @@ class D2NNCoreTests(unittest.TestCase):
         x = torch.rand(2, 1, 28, 28)
         self.assertEqual(restored(x).shape, (2, 10))
 
-    def test_main_d2nn_module_no_longer_uses_torch_fft(self):
+    def test_main_d2nn_module_mentions_fft_backend_only_for_opt_in_rs_acceleration(self):
         source = Path(importlib.import_module("d2nn").__file__).read_text(encoding="utf-8")
-        self.assertNotIn("torch.fft", source)
+        self.assertIn("torch.fft", source)
+        self.assertIn("def _forward_fft", source)
 
     def test_identity_activation_supports_backward_pass(self):
         optics = CLASSIFIER_PAPER_OPTICS.with_overrides(size=24, num_layers=2)
@@ -610,6 +703,19 @@ class D2NNCoreTests(unittest.TestCase):
         self.assertIn("gamma-0p01", run_name)
         self.assertIn("seed-42", run_name)
 
+    def test_derive_experiment_run_name_encodes_rs_acceleration_config(self):
+        run_name = derive_experiment_run_name(
+            run_name=None,
+            experiment_stage="rs_accel",
+            activation_type="none",
+            seed=7,
+            propagation_backend="fft",
+            propagation_chunk_size=128,
+        )
+        self.assertIn("rs-fft", run_name)
+        self.assertIn("chunk-128", run_name)
+        self.assertIn("seed-7", run_name)
+
     def test_derive_experiment_run_name_encodes_nonlinear_identity(self):
         run_name = derive_experiment_run_name(
             run_name=None,
@@ -665,9 +771,15 @@ class D2NNCoreTests(unittest.TestCase):
             activation_hparams={},
             model_version="rs_v1",
             loss_config={"alpha": 1.0, "beta": 0.1, "gamma": 0.01},
+            propagation_backend="fft",
+            propagation_chunk_size=128,
+            runtime_config={"allow_tf32": True},
         )
         self.assertEqual(payload["model_version"], "rs_v1")
         self.assertEqual(payload["loss_config"], {"alpha": 1.0, "beta": 0.1, "gamma": 0.01})
+        self.assertEqual(payload["propagation_backend"], "fft")
+        self.assertEqual(payload["propagation_chunk_size"], 128)
+        self.assertEqual(payload["runtime_config"], {"allow_tf32": True})
 
     def test_derive_experiment_run_name_keeps_canonical_baseline_for_default_loss_config(self):
         run_name = derive_experiment_run_name(

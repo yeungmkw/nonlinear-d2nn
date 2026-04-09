@@ -248,6 +248,17 @@ def resolve_experiment_seed(explicit_seed, manifest=None, default=42):
     return default
 
 
+def resolve_propagation_config(args=None, manifest=None):
+    manifest = manifest or {}
+    explicit_backend = getattr(args, "rs_backend", None) if args is not None else None
+    explicit_chunk_size = getattr(args, "propagation_chunk_size", None) if args is not None else None
+    propagation_backend = explicit_backend or manifest.get("propagation_backend") or "direct"
+    propagation_chunk_size = (
+        explicit_chunk_size if explicit_chunk_size is not None else manifest.get("propagation_chunk_size")
+    )
+    return propagation_backend, propagation_chunk_size
+
+
 def model_activation_diagnostics(model):
     diagnostics_fn = getattr(model, "activation_diagnostics", None)
     if diagnostics_fn is None:
@@ -691,12 +702,15 @@ def run_classification_visualization(args):
         pixel_size=args.pixel_size,
     )
     activation_type, activation_positions, activation_hparams = resolve_activation_config(manifest=manifest)
+    propagation_backend, propagation_chunk_size = resolve_propagation_config(args=args, manifest=manifest)
     model = build_model_for_task(
         "classification",
         optics,
         activation_type=activation_type,
         activation_positions=activation_positions,
         activation_hparams=activation_hparams,
+        propagation_backend=propagation_backend,
+        propagation_chunk_size=propagation_chunk_size,
     ).to(device)
     model.load_state_dict(state_dict)
     model.eval()
@@ -867,18 +881,27 @@ def run_imaging_training(args, device, data_dir, save_dir):
     dataset_cfg = build_imaging_dataset(args.dataset, data_dir, args.image_root, transform, args.seed)
     print(f"Dataset: {dataset_cfg['display_name']}")
 
+    loader_common = {
+        "batch_size": args.batch_size,
+        "num_workers": getattr(args, "num_workers", 0),
+        "pin_memory": bool(getattr(args, "pin_memory", False) and torch.cuda.is_available()),
+    }
+    if loader_common["num_workers"] > 0:
+        loader_common["persistent_workers"] = True
+        loader_common["prefetch_factor"] = getattr(args, "prefetch_factor", 2)
+
     train_loader = DataLoader(
         dataset_cfg["train_set"],
-        batch_size=args.batch_size,
         shuffle=True,
-        num_workers=0,
         generator=torch.Generator().manual_seed(args.seed),
+        **loader_common,
     )
-    val_loader = DataLoader(dataset_cfg["val_set"], batch_size=args.batch_size, shuffle=False, num_workers=0)
-    test_loader = DataLoader(dataset_cfg["test_set"], batch_size=args.batch_size, shuffle=False, num_workers=0)
+    val_loader = DataLoader(dataset_cfg["val_set"], shuffle=False, **loader_common)
+    test_loader = DataLoader(dataset_cfg["test_set"], shuffle=False, **loader_common)
 
     optics = resolve_imaging_optics(args)
     activation_type, activation_positions, activation_hparams = resolve_activation_config(args)
+    propagation_backend, propagation_chunk_size = resolve_propagation_config(args=args)
     model = build_model_for_task(
         "imaging",
         optics,
@@ -886,6 +909,8 @@ def run_imaging_training(args, device, data_dir, save_dir):
         activation_type=activation_type,
         activation_positions=activation_positions,
         activation_hparams=activation_hparams,
+        propagation_backend=propagation_backend,
+        propagation_chunk_size=propagation_chunk_size,
     ).to(device)
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"D2NNImager: {args.layers} layers, {args.size}x{args.size}, {total_params} trainable params")
@@ -900,6 +925,8 @@ def run_imaging_training(args, device, data_dir, save_dir):
         activation_positions=activation_positions,
         activation_hparams=activation_hparams,
         seed=args.seed,
+        propagation_backend=propagation_backend,
+        propagation_chunk_size=propagation_chunk_size,
     )
     checkpoint_path = checkpoint_variant_path(save_dir / dataset_cfg["checkpoint_name"], resolved_run_name)
     manifest_path = checkpoint_manifest_path(checkpoint_path)
@@ -953,6 +980,17 @@ def run_imaging_training(args, device, data_dir, save_dir):
                 activation_positions=activation_positions,
                 activation_hparams=activation_hparams,
                 model_version=MODEL_VERSION,
+                propagation_backend=propagation_backend,
+                propagation_chunk_size=propagation_chunk_size,
+                runtime_config={
+                    "device": str(device),
+                    "allow_tf32": bool(getattr(args, "allow_tf32", False) and device.type == "cuda"),
+                    "num_workers": int(getattr(args, "num_workers", 0)),
+                    "pin_memory": bool(getattr(args, "pin_memory", False) and device.type == "cuda"),
+                    "prefetch_factor": int(getattr(args, "prefetch_factor", 2))
+                    if getattr(args, "num_workers", 0) > 0
+                    else None,
+                },
             ),
             "activation_diagnostics": last_activation_stats,
         },
@@ -1053,6 +1091,7 @@ def run_imaging_visualization(args):
         pixel_size=args.pixel_size,
     )
     activation_type, activation_positions, activation_hparams = resolve_activation_config(manifest=manifest)
+    propagation_backend, propagation_chunk_size = resolve_propagation_config(args=args, manifest=manifest)
     model = build_model_for_task(
         "imaging",
         optics,
@@ -1060,6 +1099,8 @@ def run_imaging_visualization(args):
         activation_type=activation_type,
         activation_positions=activation_positions,
         activation_hparams=activation_hparams,
+        propagation_backend=propagation_backend,
+        propagation_chunk_size=propagation_chunk_size,
     ).to(device)
     model.load_state_dict(state_dict)
     model.eval()

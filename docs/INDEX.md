@@ -22,6 +22,12 @@ This index is the shortest path to the files that should be checked first.
 - Current official fabrication line: `docs/official-artifacts/fmnist5-phaseonly-aligned/`
 - Download-folder audit: `docs/official-artifacts/download-audit-2026-04-07.md`
 
+## Reproduction Logs
+
+- Reproduction index: `docs/Reproduction/README.md`
+- Main reproduction log: `docs/Reproduction/lin-2018-main-log.md`
+- Nonlinear-layer plan: `docs/Reproduction/nonlinear-layer-plan.md`
+
 ## Baseline History
 
 - Earlier phase-only baseline note: `docs/baselines/fashion-mnist-phase-only-5layer-baseline.md`

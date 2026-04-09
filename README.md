@@ -1,117 +1,95 @@
 # Nonlinear-D2NN
 
-A PyTorch-based reproduction and extension of the Diffractive Deep Neural Network (D2NN) introduced by [Lin et al., *Science* 2018](https://doi.org/10.1126/science.aat8084).
+A PyTorch reproduction and extension of the Diffractive Deep Neural Network (D2NN) from [Lin et al., Science 2018](https://doi.org/10.1126/science.aat8084).
 
-**What is D2NN?**  
-A D2NN is an all-optical computing system where information is processed entirely through diffractive layers. Each layer modulates the phase (and optionally the amplitude) of an incoming optical field; free-space propagation between layers is a *linear* operation governed by the Angular Spectrum Method (ASM). Classification or imaging capability emerges from the combination of trainable phase patterns and linear wave mixing across multiple layers, making the system end-to-end differentiable via back-propagation. Lin et al. demonstrated that such a system can classify handwritten digits and act as an imaging lens at terahertz frequencies.
+## Overview
 
-**What this repository adds beyond the paper:**  
-After reproducing the three main-text tasks (MNIST, Fashion-MNIST and the imaging lens), this repository systematically studies *intensity-dependent nonlinear field activations* inserted between diffractive layers — exploring three activation mechanisms (coherent amplitude gate, coherent phase shift, incoherent intensity detector) across four placement strategies (front, mid, back, all layers). The strongest configuration found so far (`incoherent_intensity + back`) is then evaluated on Fashion-MNIST, grayscale CIFAR-10 and RGB CIFAR-10 to assess cross-dataset transfer.
+This repository contains:
 
----
+- a classification and imaging D2NN simulation pipeline
+- nonlinear activation experiments inserted between diffractive layers
+- fabrication-oriented phase export tooling
 
-## Features
+The active code path now uses Rayleigh-Sommerfeld propagation (`rs_v1`), composite classification loss, and contrast-aware checkpoint selection.
 
-- **Phase-only Forward Propagation**: Numerical simulation of free-space angular spectrum propagation (Angular Spectrum Method) with phase-only modulation.
-- **Task Support**:
-  - Image classification on MNIST, Fashion-MNIST, CIFAR-10 (grayscale and RGB)
-  - Imaging experiments on STL10 or custom `imagefolder` datasets
-- **Nonlinear Activation Extensions**: Configurable intensity-dependent activation mechanisms (`coherent_amplitude`, `coherent_phase`, `incoherent_intensity`) with placement ablations (`front`, `mid`, `back`, `all`).
-- **Experiment Grid Runner**: `--print-experiment-grid` and `--run-experiment-grid` flags for systematic mechanism and placement sweeps.
-- **Physical Export Toolchain**: Converts trained phase masks into thickness / height-map representations and optional STL exports for fabrication-oriented workflows.
-- **Reproducibility Tooling**: Seed control, `--run-name` artifact isolation, and JSON manifests recording all hyperparameters alongside each checkpoint.
+If you only need the active training path, start with [train.py](train.py) and the "Current Training Snapshot" section below.
 
----
+## Status
 
-## Results
+- Current `main` should be understood through the `rs_v1` implementation, not through older ASM-era experiment numbers.
+- Detailed statistics do not live in this README. They are kept in report files and experiment artifacts.
+- Archived pre-RS outputs were removed from the working tree to avoid contaminating new runs.
 
-### Phase-Only Reproduction Baseline
+Current detail entrypoints:
 
-| Task | Paper | This repo | Training |
-|------|-------|---------|---------|
-| [MNIST](http://yann.lecun.com/exdb/mnist/) classification | 97.61 % | **97.63 %** | 20 epochs, 5 layers, 200×200 px/layer |
-| [Fashion-MNIST](https://github.com/zalandoresearch/fashion-mnist) classification | 81.13 % | **87.49 %** | 20 epochs, 5 layers, 200×200 px/layer |
-| Imaging lens (D2NNImager) | qualitative | Test MSE = 0.0259 | 10 epochs on [STL10](https://cs.stanford.edu/~acoates/stl10/), 5 layers |
+- [reports/post_rs_compressed/2026-04-10/summary.md](reports/post_rs_compressed/2026-04-10/summary.md)
+- [checkpoints_proxy/best_fashion_mnist.fashion_mnist_phase_only_5ep_size100_seed42_post_rs_fft_proxy.json](checkpoints_proxy/best_fashion_mnist.fashion_mnist_phase_only_5ep_size100_seed42_post_rs_fft_proxy.json)
+- [checkpoints_proxy/best_fashion_mnist.fashion_mnist_incoherent_back_5ep_size100_seed42_post_rs_fft_proxy.json](checkpoints_proxy/best_fashion_mnist.fashion_mnist_incoherent_back_5ep_size100_seed42_post_rs_fft_proxy.json)
 
-> The imaging lens in this repo uses [STL10](https://cs.stanford.edu/~acoates/stl10/) natural images rather than the paper's original terahertz beams; the propagation physics model is identical.
+Archive root for removed pre-RS artifacts:
 
-### Nonlinear Extension — [Fashion-MNIST](https://github.com/zalandoresearch/fashion-mnist)
+- `C:\Users\Jiangqianxian\source\repos\d2nn_artifact_archive\2026-04-09-pre-rs`
 
-Configuration: `incoherent_intensity` activation, `back` placement, 5-layer phase-only base, 20 epochs, seed 42.
+## Current Training Snapshot
 
-| Configuration | Test Accuracy |
-|---|---|
-| Phase-only baseline | 87.49 % |
-| + Nonlinear (back, 20 ep, seed 42) | **87.61 %** |
-| + Nonlinear (back, 20 ep, seed 7) | 87.36 % |
-| + Nonlinear (back, 20 ep, seed 123) | 87.28 % |
+[train.py](train.py) is the main training entrypoint for the active RS training path. The current proxy validation is the shortest complete proof that `train.py -> checkpoint -> manifest -> contrast -> visualize.py` works under `rs_v1`.
 
-### Nonlinear Extension — Grayscale [CIFAR-10](https://www.cs.toronto.edu/~kriz/cifar.html)
+The main quantitative fields to read from each classification manifest are:
 
-Configuration: same activation and placement, 10 epochs, two seeds.
+- `best_val_accuracy`
+- `best_val_contrast`
+- `best_epoch`
+- `test_accuracy`
+- `test_contrast`
+- `history`
 
-| Configuration | seed=42 | seed=7 |
-|---|---|---|
-| Phase-only baseline | 35.09 % | 35.10 % |
-| + Nonlinear (incoherent, back) | **39.48 %** (+4.4 pt) | **39.88 %** (+4.8 pt) |
+Proxy configuration:
 
-### Nonlinear Extension — RGB [CIFAR-10](https://www.cs.toronto.edu/~kriz/cifar.html)
+- `Fashion-MNIST`
+- `size=100`
+- `layers=5`
+- `epochs=5`
+- `seed=42`
+- `rs-backend=fft`
 
-Configuration: same activation and placement, 20 epochs, three seeds.
+| Variant | Activation | Test acc | Test contrast | Best val acc | Best val contrast |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `phase-only` | `none` | 82.08 | 0.4925 | 82.68 | 0.4946 |
+| `incoherent_back` | `incoherent_intensity@back` | 82.22 | 0.4964 | 82.92 | 0.4997 |
 
-| Configuration | mean (3 seeds) | lift |
-|---|---|---|
-| Phase-only baseline | 45.27 % | — |
-| + Nonlinear (incoherent, back) | **47.81 %** | **+2.54 pt** |
+- `incoherent_back - phase-only`: `+0.14 pt` accuracy, `+0.0039` contrast.
+- Both runs exceeded the paper target accuracy `81.13%` under the proxy configuration.
+- Full details: [reports/post_rs_compressed/2026-04-10/summary.md](reports/post_rs_compressed/2026-04-10/summary.md)
 
-### Visualizations
+Key figures:
 
-| MNIST phase-only (20 ep) | Fashion-MNIST phase-only (20 ep) |
-|:---:|:---:|
-| ![MNIST confusion matrix](figures/confusion_matrix.png) | ![Fashion-MNIST confusion matrix](figures/fashion_mnist/confusion_matrix.png) |
+Training history
 
----
+| Phase-only | Incoherent-back |
+| --- | --- |
+| ![Phase-only classification history](figures/post_rs_compressed/2026-04-10/fashion_mnist_phase_only_5ep_size100_seed42_post_rs_fft_proxy/classification_history.png) | ![Incoherent-back classification history](figures/post_rs_compressed/2026-04-10/fashion_mnist_incoherent_back_5ep_size100_seed42_post_rs_fft_proxy/classification_history.png) |
 
-## Released Checkpoints
+Output energy
 
-Trained weights and large experiment artifacts are distributed via [GitHub Releases](https://github.com/yeungmkw/nonlinear-d2nn/releases) rather than committed directly to the repository to keep clone size small.
-
-| Release tag | Contents |
-|---|---|
-| `pre-nonlinear-phase-only-v1` | MNIST, Fashion-MNIST and STL10 imaging phase-only checkpoints; phase-plate exports |
-| `nonlinear-incoherent-back-cifar10-rgb-v1` | RGB CIFAR-10 nonlinear vs. baseline checkpoint pairs (seed 42 / 7) |
-
----
-
-## Current Official Lookup
-
-If you are trying to find the current fabrication-target phase package first, start here:
-
-- [docs/INDEX.md](docs/INDEX.md)
-- [docs/official-artifacts/fmnist5-phaseonly-aligned/](docs/official-artifacts/fmnist5-phaseonly-aligned/)
-- [docs/fabrication/fashion-mnist-phase-only-lightpath-protocol.md](docs/fabrication/fashion-mnist-phase-only-lightpath-protocol.md)
-- [docs/fabrication/fashion-mnist-phase-only-lab-handoff.md](docs/fabrication/fashion-mnist-phase-only-lab-handoff.md)
-
-Current short name for this line: `fmnist5-phaseonly-aligned`
-
-This name now maps together the current checkpoint/manifest, understanding-report figures, aligned export package, and the repo-tracked directly reusable phase files.
-
----
+| Phase-only | Incoherent-back |
+| --- | --- |
+| ![Phase-only output energy](figures/post_rs_compressed/2026-04-10/fashion_mnist_phase_only_5ep_size100_seed42_post_rs_fft_proxy/output_energy.png) | ![Incoherent-back output energy](figures/post_rs_compressed/2026-04-10/fashion_mnist_incoherent_back_5ep_size100_seed42_post_rs_fft_proxy/output_energy.png) |
 
 ## Installation
 
 Requirements:
+
 - Python 3.11+
 - PyTorch 2.0+
-- CUDA-capable GPU recommended (CPU works for unit tests)
+- CUDA-capable GPU recommended
 
-Install [uv](https://docs.astral.sh/uv/getting-started/installation/) if you do not have it yet:
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) first if needed:
 
 ```bash
 # Linux / macOS
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Windows (PowerShell)
+# Windows PowerShell
 powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 ```
 
@@ -120,114 +98,122 @@ Clone and install:
 ```bash
 git clone https://github.com/yeungmkw/nonlinear-d2nn.git
 cd nonlinear-d2nn
-
-# GPU training (default): installs PyTorch from the CUDA 12.6 index
 uv sync
-
-# To install dev/test dependencies as well:
 uv sync --dev
 ```
 
-> **CPU-only environment (CI / no GPU):** use the CPU PyTorch wheel index instead of the CUDA-configured project default when creating the environment.
-
-> Some checkpoints and larger experiment artifacts are available from [GitHub Releases](https://github.com/yeungmkw/nonlinear-d2nn/releases) and are not included in the repository itself.
-
----
-
 ## Quick Start
 
-### 1. Train a classification model
+### Training Entry Point
+
+`train.py` is the main entrypoint for both classification and imaging experiments. `visualize.py` consumes the resulting checkpoints and manifests to generate the figures above.
+
+Current proxy validation runs:
 
 ```bash
-# MNIST — reproduces the paper's main result
+uv run python train.py --task classification --dataset fashion-mnist --epochs 5 \
+    --size 100 --layers 5 --seed 42 --rs-backend fft
+
+uv run python train.py --task classification --dataset fashion-mnist --epochs 5 \
+    --size 100 --layers 5 --seed 42 \
+    --activation-type incoherent_intensity --activation-placement back \
+    --activation-preset balanced --rs-backend fft
+```
+
+Representative full-budget classification commands:
+
+```bash
 uv run python train.py --task classification --dataset mnist --epochs 20 --size 200 --layers 5
 
-# Fashion-MNIST
 uv run python train.py --task classification --dataset fashion-mnist --epochs 20 --size 200 --layers 5
 
-# RGB CIFAR-10 with nonlinear activation
 uv run python train.py --task classification --dataset cifar10-rgb --epochs 20 \
     --size 200 --layers 5 \
     --activation-type incoherent_intensity --activation-placement back \
     --activation-preset balanced
 ```
 
-### 2. Train an imaging lens
+Train imaging:
 
 ```bash
 uv run python train.py --task imaging --dataset stl10 \
     --epochs 10 --size 200 --layers 5 --image-size 64 --batch-size 4
 ```
 
-### 3. Evaluate and visualize
+Visualize:
 
 ```bash
 uv run python visualize.py --task classification --dataset fashion-mnist \
     --checkpoint checkpoints/best_fashion_mnist.pth
 ```
 
-### 4. Export phase plates for fabrication
+Export phase plates:
 
 ```bash
 uv run python export_phase_plate.py --task classification \
     --checkpoint checkpoints/best_fashion_mnist.pth --export-stl
 ```
 
-*Outputs are generated under `exports/<checkpoint_name>/`, including a Markdown report, `.npy` arrays, per-layer `.csv` data and optional `.stl` meshes.*
-
-For the current official `fmnist5-phaseonly-aligned` fabrication line, use the frozen final-export wrapper instead:
+Run the frozen fabrication export wrapper:
 
 ```bash
-# Copy the template once, fill in the lab-confirmed values, then run:
 copy fabrication/fmnist5-phaseonly-aligned.lab.template.json fabrication/fmnist5-phaseonly-aligned.lab.json
 uv run python export_fmnist5_phaseonly_aligned_final.py --lab-config fabrication/fmnist5-phaseonly-aligned.lab.json
 ```
 
-*The wrapper freezes the checkpoint and optical preset, writes the export under `exports/fmnist5-phaseonly-aligned-final_<YYYYMMDD>/`, and adds `validation_summary.json`. CLI values can still override the JSON for one-off scans.*
-
-### 5. Print or run an ablation grid
+Preview or run ablation grids:
 
 ```bash
-# Preview commands for position ablation
 uv run python train.py --print-experiment-grid coherent_amplitude_positions
 
-# Run a mechanism ablation automatically (sequential)
 uv run python train.py --run-experiment-grid activation_mechanisms \
     --task classification --dataset fashion-mnist --epochs 5
 ```
 
----
+## Where To Look
 
-## Project Structure
+If you need the current fabrication-target line first:
 
-```
+- [docs/INDEX.md](docs/INDEX.md)
+- [docs/official-artifacts/fmnist5-phaseonly-aligned/](docs/official-artifacts/fmnist5-phaseonly-aligned/)
+- [docs/fabrication/fashion-mnist-phase-only-lightpath-protocol.md](docs/fabrication/fashion-mnist-phase-only-lightpath-protocol.md)
+- [docs/fabrication/fashion-mnist-phase-only-lab-handoff.md](docs/fabrication/fashion-mnist-phase-only-lab-handoff.md)
+
+If you need detailed experiment numbers:
+
+- use `reports/`
+- use `checkpoints_proxy/*.json` or `checkpoints/*.json`
+- use [docs/Reproduction/](docs/Reproduction/)
+- do not mine the README for statistics
+
+## Project Layout
+
+```text
 nonlinear-d2nn/
-├── d2nn.py               # Core: DiffractiveLayer, D2NNBase, D2NN, D2NNImager, nonlinear activations
-├── tasks.py              # Dataset loaders, activation config, training / evaluation logic
-├── artifacts.py          # Optics presets, checkpoint / manifest helpers, export utilities
-├── train.py              # Unified training entrypoint (classification + imaging)
-├── visualize.py          # Inference visualisation (detector output, confusion matrix, reconstructions)
-├── export_phase_plate.py # Converts phase weights → height maps, CSV, STL
-├── tests/                # Unit tests (77 tests covering optics, activations, CLI, numerics)
-├── docs/baselines/       # Frozen baseline records used as control groups for ablations
-├── figures/              # Representative result figures committed to the repository
-└── pyproject.toml        # Dependencies managed with uv
+|- d2nn.py
+|- tasks.py
+|- artifacts.py
+|- train.py
+|- visualize.py
+|- export_phase_plate.py
+|- tests/
+|- docs/
+|- reports/
+|- figures/
+`- pyproject.toml
 ```
 
----
+## Limitations
 
-## Known Limitations & Scope
-
-- **Numerical simulation only**: This repository is a wave-optics simulation framework. It does not integrate physical optical tabletop experiments.
-- **Paraxial approximation**: Propagation uses the Angular Spectrum Method (ASM) under paraxial assumptions; highly oblique diffraction setups may require more rigorous routines.
-- **Imaging dataset**: The current imaging examples use STL10 rather than ImageNet-style natural images as in the paper's supplementary material.
-- **Fabrication-aware training**: Physical constraints (material relief limits, quantization) can be exported after training but are not yet part of the optimization loop.
-
----
+- Numerical simulation only; no physical tabletop integration.
+- The active RS direct-space training path is materially slower than the earlier ASM/FFT trunk.
+- Repo-visible post-RS numbers currently include reevaluation reports and compressed proxy validation; they are not yet a full same-budget retrain replacement.
+- Imaging examples currently use STL10 rather than the paper's original imaging setup.
+- Fabrication constraints are exported after training, not optimized in-loop.
 
 ## References
 
-- **Core paper**: Lin, X., Rivenson, Y., Yardimci, N. T., Veli, M., Luo, Y., Jarrahi, M., & Ozcan, A. (2018). All-optical machine learning using diffractive deep neural networks. *Science*, 361(6406), 1004–1008. [doi:10.1126/science.aat8084](https://doi.org/10.1126/science.aat8084)
-- Yan, T., Yang, J., Zheng, Z., et al. Multilayer nonlinear diffraction neural networks with programmable and fast ReLU activation function. *Nature Communications* (2025). [Article](https://www.nature.com/articles/s41467-025-65275-0)
+- Lin, X., Rivenson, Y., Yardimci, N. T., Veli, M., Luo, Y., Jarrahi, M., and Ozcan, A. (2018). All-optical machine learning using diffractive deep neural networks. Science, 361(6406), 1004-1008. [doi:10.1126/science.aat8084](https://doi.org/10.1126/science.aat8084)
+- Yan, T., Yang, J., Zheng, Z., et al. Multilayer nonlinear diffraction neural networks with programmable and fast ReLU activation function. Nature Communications (2025). [Article](https://www.nature.com/articles/s41467-025-65275-0)
 - Wang, R., et al. A surface-normal photodetector as nonlinear activation function in diffractive optical neural networks (2023). [arXiv:2305.03627](https://arxiv.org/abs/2305.03627)
 - Wetzstein, G., et al. Reprogrammable Electro-Optic Nonlinear Activation Functions for Optical Neural Networks (2019). [arXiv:1903.04579](https://arxiv.org/abs/1903.04579)

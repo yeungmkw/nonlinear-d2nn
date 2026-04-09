@@ -137,6 +137,8 @@ def build_model_for_task(
     activation_type="none",
     activation_positions=None,
     activation_hparams=None,
+    propagation_chunk_size=None,
+    propagation_backend="direct",
 ):
     if task == "classification":
         return D2NN(
@@ -144,6 +146,8 @@ def build_model_for_task(
             activation_type=activation_type,
             activation_positions=activation_positions,
             activation_hparams=activation_hparams,
+            propagation_chunk_size=propagation_chunk_size,
+            propagation_backend=propagation_backend,
         )
     if task == "imaging":
         return D2NNImager(
@@ -151,6 +155,8 @@ def build_model_for_task(
             activation_type=activation_type,
             activation_positions=activation_positions,
             activation_hparams=activation_hparams,
+            propagation_chunk_size=propagation_chunk_size,
+            propagation_backend=propagation_backend,
         )
     raise ValueError(f"Unsupported task: {task}")
 
@@ -190,6 +196,8 @@ def derive_experiment_run_name(
     activation_hparams: dict[str, Any] | None = None,
     seed: int | None = None,
     loss_config: dict[str, Any] | None = None,
+    propagation_backend: str | None = None,
+    propagation_chunk_size: int | None = None,
 ):
     if run_name:
         return run_name
@@ -200,7 +208,9 @@ def derive_experiment_run_name(
         for key, value in loss_config.items()
     )
 
-    if activation_type in (None, "", "none") and not has_nondefault_loss_config:
+    has_nondefault_propagation = (propagation_backend not in (None, "", "direct")) or (propagation_chunk_size is not None)
+
+    if activation_type in (None, "", "none") and not has_nondefault_loss_config and not has_nondefault_propagation:
         return None
 
     stage_label = (experiment_stage or "nonlinear").replace("_", "-")
@@ -234,6 +244,12 @@ def derive_experiment_run_name(
             continue
         parts.append(f"{key}-{_format_run_value(value)}")
 
+    if propagation_backend not in (None, "", "direct"):
+        parts.append(f"rs-{_format_run_value(propagation_backend)}")
+
+    if propagation_chunk_size is not None:
+        parts.append(f"chunk-{_format_run_value(int(propagation_chunk_size))}")
+
     if seed is not None:
         parts.append(f"seed-{seed}")
 
@@ -265,6 +281,9 @@ def experiment_manifest_fields(
     activation_hparams=None,
     model_version=None,
     loss_config=None,
+    propagation_backend=None,
+    propagation_chunk_size=None,
+    runtime_config=None,
 ):
     payload = {
         "checkpoint": str(Path(checkpoint_path)),
@@ -276,6 +295,9 @@ def experiment_manifest_fields(
         "activation_hparams": dict(activation_hparams or {}),
         "model_version": model_version,
         "loss_config": dict(loss_config or {}),
+        "propagation_backend": propagation_backend,
+        "propagation_chunk_size": propagation_chunk_size,
+        "runtime_config": dict(runtime_config or {}),
     }
     if optics is not None:
         payload["optical_config"] = optical_config_dict(optics)

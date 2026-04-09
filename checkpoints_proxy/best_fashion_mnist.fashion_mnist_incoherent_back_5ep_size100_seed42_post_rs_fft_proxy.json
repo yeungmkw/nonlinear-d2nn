@@ -1,0 +1,148 @@
+{
+  "activation_diagnostics": {
+    "5": {
+      "emission_phase_mode": "zero",
+      "max_output_amplitude": 2.7485084533691406,
+      "mean_intensity": 0.01747649721801281,
+      "mean_output_amplitude": 0.008925450034439564,
+      "min_output_amplitude": 0.0
+    }
+  },
+  "activation_hparams": {
+    "emission_phase_mode": "zero",
+    "responsivity": 1.0,
+    "threshold": 0.1
+  },
+  "activation_positions": [
+    5
+  ],
+  "activation_type": "incoherent_intensity",
+  "batch_size": 64,
+  "best_epoch": 4,
+  "best_val_accuracy": 82.92,
+  "best_val_contrast": 0.49972808265686036,
+  "checkpoint": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn\\checkpoints_proxy\\best_fashion_mnist.fashion_mnist_incoherent_back_5ep_size100_seed42_post_rs_fft_proxy.pth",
+  "dataset": "Fashion-MNIST",
+  "epochs": 5,
+  "experiment_stage": "post-rs-compressed-proxy",
+  "history": {
+    "train": {
+      "accuracy": [
+        71.79818181818182,
+        80.18727272727273,
+        81.77454545454546,
+        82.62,
+        83.22909090909091
+      ],
+      "ce": [
+        0.9587638708201321,
+        0.7021598977522416,
+        0.6442216554728422,
+        0.6141915036808361,
+        0.5931309757709503
+      ],
+      "contrast": [
+        0.3246047580957413,
+        0.44038005390167234,
+        0.4745985069838437,
+        0.4948893489317461,
+        0.5090690964958885
+      ],
+      "loss": [
+        0.14044052189805292,
+        0.106085858957334,
+        0.09866967799663544,
+        0.0947466016937386,
+        0.09200131331682206
+      ],
+      "mse": [
+        0.043193861232833426,
+        0.03223225308087739,
+        0.029541879030791196,
+        0.02812523196447979,
+        0.027153671874241395
+      ],
+      "reg": [
+        0.1370271970629692,
+        0.36376144451228054,
+        0.4705632180343975,
+        0.5202218279231678,
+        0.5534542919592423
+      ]
+    },
+    "val": {
+      "accuracy": [
+        77.52,
+        81.02,
+        81.74,
+        82.92,
+        82.32
+      ],
+      "ce": [
+        0.7804483300209045,
+        0.6814722071647644,
+        0.6367335591316223,
+        0.617127412891388,
+        0.6228624106407166
+      ],
+      "contrast": [
+        0.4025621341705322,
+        0.45360101585388185,
+        0.47801429119110106,
+        0.49972808265686036,
+        0.5030977598190307
+      ],
+      "loss": [
+        0.11641594699621201,
+        0.1036400583744049,
+        0.09796606773734093,
+        0.095296810734272,
+        0.09613964142799378
+      ],
+      "mse": [
+        0.03561471053957939,
+        0.031184373971819876,
+        0.02930950839817524,
+        0.028196749997138976,
+        0.028217481692135334
+      ],
+      "reg": [
+        0.2756398618221283,
+        0.43084651231765747,
+        0.4983198344707489,
+        0.5387317538261414,
+        0.5635917782783508
+      ]
+    }
+  },
+  "learning_rate": 0.01,
+  "loss_config": {
+    "alpha": 1.0,
+    "beta": 0.1,
+    "gamma": 0.01
+  },
+  "model_version": "rs_v1",
+  "optical_config": {
+    "layer_distance": 0.03,
+    "num_layers": 5,
+    "pixel_size": 0.0004,
+    "size": 100,
+    "wavelength": 0.00075
+  },
+  "paper_target_accuracy": 81.13,
+  "propagation_backend": "fft",
+  "propagation_chunk_size": null,
+  "run_name": "fashion_mnist_incoherent_back_5ep_size100_seed42_post_rs_fft_proxy",
+  "runtime_config": {
+    "allow_tf32": true,
+    "device": "cuda",
+    "num_workers": 2,
+    "pin_memory": true,
+    "prefetch_factor": 2
+  },
+  "seed": 42,
+  "task": "classification",
+  "test_accuracy": 82.22,
+  "test_contrast": 0.4964439705848694,
+  "test_loss": 0.09590586786270142
+}

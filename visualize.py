@@ -30,6 +30,19 @@ def build_parser():
     parser.add_argument("--understanding-report", action="store_true", help="also save understanding-report figures")
     parser.add_argument("--sample-indices", type=str, default="0,1,2")
     parser.add_argument("--quantization-levels", type=str, default="8,16")
+    parser.add_argument(
+        "--rs-backend",
+        type=str,
+        default=None,
+        choices=["direct", "fft"],
+        help="optional override for the RS propagation backend; defaults to the checkpoint manifest",
+    )
+    parser.add_argument(
+        "--propagation-chunk-size",
+        type=int,
+        default=None,
+        help="optional override for direct-backend chunk size; defaults to the checkpoint manifest",
+    )
     parser.add_argument("--wavelength", type=float, default=None)
     parser.add_argument("--layer-distance", type=float, default=None)
     parser.add_argument("--pixel-size", type=float, default=None)

@@ -1,0 +1,44 @@
+{
+  "experiment_stage": "post-rs-compressed-proxy",
+  "dataset": "Fashion-MNIST",
+  "config": {
+    "size": 100,
+    "layers": 5,
+    "epochs": 5,
+    "seed": 42,
+    "batch_size": 64,
+    "propagation_backend": "fft"
+  },
+  "runs": [
+    {
+      "run_name": "fashion_mnist_phase_only_5ep_size100_seed42_post_rs_fft_proxy",
+      "activation_type": "none",
+      "activation_positions": [],
+      "best_epoch": 4,
+      "best_val_accuracy": 82.68,
+      "best_val_contrast": 0.4946181356430054,
+      "test_accuracy": 82.08,
+      "test_contrast": 0.4925057394981384,
+      "manifest_path": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn\\checkpoints_proxy\\best_fashion_mnist.fashion_mnist_phase_only_5ep_size100_seed42_post_rs_fft_proxy.json",
+      "figure_dir": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn\\figures\\post_rs_compressed\\2026-04-10\\fashion_mnist_phase_only_5ep_size100_seed42_post_rs_fft_proxy"
+    },
+    {
+      "run_name": "fashion_mnist_incoherent_back_5ep_size100_seed42_post_rs_fft_proxy",
+      "activation_type": "incoherent_intensity",
+      "activation_positions": [
+        5
+      ],
+      "best_epoch": 4,
+      "best_val_accuracy": 82.92,
+      "best_val_contrast": 0.49972808265686036,
+      "test_accuracy": 82.22,
+      "test_contrast": 0.4964439705848694,
+      "manifest_path": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn\\checkpoints_proxy\\best_fashion_mnist.fashion_mnist_incoherent_back_5ep_size100_seed42_post_rs_fft_proxy.json",
+      "figure_dir": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn\\figures\\post_rs_compressed\\2026-04-10\\fashion_mnist_incoherent_back_5ep_size100_seed42_post_rs_fft_proxy"
+    }
+  ],
+  "comparison": {
+    "test_accuracy_delta_incoherent_back_minus_phase_only": 0.14,
+    "test_contrast_delta_incoherent_back_minus_phase_only": 0.0039382310867309995
+  }
+}

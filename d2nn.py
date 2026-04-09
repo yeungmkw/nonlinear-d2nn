@@ -9,6 +9,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint as activation_checkpoint
 
 
 def field_intensity(u):
@@ -42,6 +43,19 @@ def _discard_state_dict_key_compatibility(missing_keys, unexpected_keys, key):
         missing_keys.remove(key)
     while key in unexpected_keys:
         unexpected_keys.remove(key)
+
+
+def checkpointed_module_forward(module, u):
+    """
+    Recompute memory-heavy propagation during backward when gradients are enabled.
+
+    RS direct-space propagation creates a large autograd graph at 200x200 resolution.
+    Checkpointing keeps the training path numerically identical while trading compute
+    for memory so the default paper-sized model remains trainable on 8 GB GPUs.
+    """
+    if not torch.is_grad_enabled() or not u.requires_grad or not getattr(module, "training", False):
+        return module(u)
+    return activation_checkpoint(lambda x: module(x), u, use_reentrant=False)
 
 
 def embed_amplitude_image(x, size, target_size=None):
@@ -242,21 +256,28 @@ def build_activation_module(activation_type, activation_hparams=None):
 
 
 class RayleighSommerfeldPropagation(nn.Module):
-    """Direct-space Rayleigh-Sommerfeld propagation with chunked kernel evaluation."""
+    """Rayleigh-Sommerfeld propagation using either direct integration or FFT convolution."""
 
-    def __init__(self, size, wavelength, distance, pixel_size, chunk_size=None):
+    def __init__(self, size, wavelength, distance, pixel_size, chunk_size=None, backend="direct"):
         super().__init__()
         self.size = int(size)
         self.wavelength = float(wavelength)
         self.distance = float(distance)
         self.pixel_size = float(pixel_size)
+        self.backend = str(backend or "direct").lower()
+        if self.backend not in {"direct", "fft"}:
+            raise ValueError(f"Unsupported RS propagation backend: {backend}")
+
         self.chunk_size = int(chunk_size) if chunk_size is not None else self._default_chunk_size(self.size)
+        self.fft_shape = (3 * self.size - 2, 3 * self.size - 2)
+        self._fft_kernel_cache = {}
 
         coords = (torch.arange(self.size, dtype=torch.float32) - (self.size - 1) / 2.0) * self.pixel_size
         grid_y, grid_x = torch.meshgrid(coords, coords, indexing="ij")
         points = torch.stack((grid_x.reshape(-1), grid_y.reshape(-1)), dim=1)
         self.register_buffer("source_points", points, persistent=False)
         self.register_buffer("target_points", points.clone(), persistent=False)
+        self.register_buffer("relative_kernel", self._build_relative_kernel(), persistent=False)
 
     @staticmethod
     def _default_chunk_size(size):
@@ -276,10 +297,44 @@ class RayleighSommerfeldPropagation(nn.Module):
         kernel = (-1j * (self.pixel_size**2 / self.wavelength)) * (self.distance / r2) * phase
         return kernel.to(dtype=dtype)
 
+    def _build_relative_kernel(self):
+        delta_coords = torch.arange(-(self.size - 1), self.size, dtype=torch.float32) * self.pixel_size
+        grid_y, grid_x = torch.meshgrid(delta_coords, delta_coords, indexing="ij")
+        r2 = grid_x.square() + grid_y.square() + self.distance**2
+        r = torch.sqrt(r2.clamp_min(1e-12))
+        phase = torch.exp(1j * (2 * np.pi / self.wavelength) * r)
+        kernel = (-1j * (self.pixel_size**2 / self.wavelength)) * (self.distance / r2) * phase
+        return kernel.to(torch.cfloat)
+
+    def _fft_kernel(self, device, dtype):
+        cache_key = (str(device), dtype)
+        kernel = self._fft_kernel_cache.get(cache_key)
+        if kernel is not None:
+            return kernel
+
+        padded_kernel = torch.zeros(self.fft_shape, dtype=dtype, device=device)
+        relative_kernel = self.relative_kernel.to(device=device, dtype=dtype)
+        padded_kernel[: relative_kernel.shape[0], : relative_kernel.shape[1]] = relative_kernel
+        kernel = torch.fft.fft2(padded_kernel)
+        self._fft_kernel_cache[cache_key] = kernel
+        return kernel
+
+    def _forward_fft(self, u):
+        kernel_fft = self._fft_kernel(u.device, u.dtype)
+        padded_field = torch.zeros((u.shape[0], *self.fft_shape), dtype=u.dtype, device=u.device)
+        padded_field[:, : self.size, : self.size] = u
+        propagated = torch.fft.ifft2(torch.fft.fft2(padded_field) * kernel_fft.unsqueeze(0))
+        start = self.size - 1
+        end = start + self.size
+        return propagated[:, start:end, start:end]
+
     def forward(self, u):
         batch, height, width = u.shape
         if height != self.size or width != self.size:
             raise ValueError(f"Expected a {self.size}x{self.size} field, got {height}x{width}")
+
+        if self.backend == "fft":
+            return self._forward_fft(u)
 
         flat_field = u.reshape(batch, -1)
         outputs = []
@@ -293,7 +348,15 @@ class RayleighSommerfeldPropagation(nn.Module):
 class DiffractiveLayer(nn.Module):
     """Single diffractive layer with learnable phase modulation."""
 
-    def __init__(self, size, wavelength, layer_distance, pixel_size, propagation_chunk_size=None):
+    def __init__(
+        self,
+        size,
+        wavelength,
+        layer_distance,
+        pixel_size,
+        propagation_chunk_size=None,
+        propagation_backend="direct",
+    ):
         super().__init__()
         self.size = int(size)
         self.wavelength = float(wavelength)
@@ -307,6 +370,7 @@ class DiffractiveLayer(nn.Module):
             distance=layer_distance,
             pixel_size=pixel_size,
             chunk_size=propagation_chunk_size,
+            backend=propagation_backend,
         )
 
     def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
@@ -318,7 +382,7 @@ class DiffractiveLayer(nn.Module):
     def forward(self, u):
         modulation = torch.exp(1j * self.phase)
         u = u * modulation.unsqueeze(0)
-        return self.propagation(u)
+        return checkpointed_module_forward(self.propagation, u)
 
 
 class DiffractiveNetwork:
@@ -335,7 +399,7 @@ class DiffractiveNetwork:
             key = str(layer_idx)
             if key in self.activations:
                 u = self.activations[key](u)
-        return self.output_propagation(u)
+        return checkpointed_module_forward(self.output_propagation, u)
 
 
 class DetectorLayer(nn.Module):
@@ -402,6 +466,7 @@ class D2NNBase(nn.Module):
         activation_positions=None,
         activation_hparams=None,
         propagation_chunk_size=None,
+        propagation_backend="direct",
     ):
         super().__init__()
         self.size = size
@@ -417,6 +482,7 @@ class D2NNBase(nn.Module):
                     layer_distance,
                     pixel_size,
                     propagation_chunk_size=propagation_chunk_size,
+                    propagation_backend=propagation_backend,
                 )
                 for _ in range(num_layers)
             ]
@@ -433,6 +499,7 @@ class D2NNBase(nn.Module):
             distance=layer_distance,
             pixel_size=pixel_size,
             chunk_size=propagation_chunk_size,
+            backend=propagation_backend,
         )
         self.network = DiffractiveNetwork(self.layers, self.output_propagation, self.activations)
 
@@ -481,6 +548,7 @@ class D2NN(D2NNBase):
         activation_positions=None,
         activation_hparams=None,
         propagation_chunk_size=None,
+        propagation_backend="direct",
     ):
         super().__init__(
             num_layers=num_layers,
@@ -492,6 +560,7 @@ class D2NN(D2NNBase):
             activation_positions=activation_positions,
             activation_hparams=activation_hparams,
             propagation_chunk_size=propagation_chunk_size,
+            propagation_backend=propagation_backend,
         )
         self.num_classes = num_classes
         self.detector_layer = DetectorLayer(size=size, num_classes=num_classes, detector_size=detector_size)
@@ -551,6 +620,7 @@ class D2NNImager(D2NNBase):
         activation_positions=None,
         activation_hparams=None,
         propagation_chunk_size=None,
+        propagation_backend="direct",
     ):
         super().__init__(
             num_layers=num_layers,
@@ -562,6 +632,7 @@ class D2NNImager(D2NNBase):
             activation_positions=activation_positions,
             activation_hparams=activation_hparams,
             propagation_chunk_size=propagation_chunk_size,
+            propagation_backend=propagation_backend,
         )
         self.input_fraction = input_fraction
 

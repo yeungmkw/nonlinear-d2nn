@@ -57,6 +57,9 @@ class ClassificationRunConfig:
     resolved_run_name: str | None
     checkpoint_path: Path
     manifest_path: Path
+    propagation_backend: str
+    propagation_chunk_size: int | None
+    runtime_config: dict
 
 
 def seed_everything(seed):
@@ -65,6 +68,30 @@ def seed_everything(seed):
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+
+
+def build_runtime_config(args, device):
+    return {
+        "device": str(device),
+        "allow_tf32": bool(getattr(args, "allow_tf32", False) and device.type == "cuda"),
+        "num_workers": int(getattr(args, "num_workers", 0)),
+        "pin_memory": bool(getattr(args, "pin_memory", False) and device.type == "cuda"),
+        "prefetch_factor": int(getattr(args, "prefetch_factor", 2)) if getattr(args, "num_workers", 0) > 0 else None,
+    }
+
+
+def configure_runtime(args, device):
+    if device.type != "cuda":
+        return
+
+    allow_tf32 = bool(args.allow_tf32)
+    if hasattr(torch.backends.cuda.matmul, "allow_tf32"):
+        torch.backends.cuda.matmul.allow_tf32 = allow_tf32
+    if hasattr(torch.backends.cudnn, "allow_tf32"):
+        torch.backends.cudnn.allow_tf32 = allow_tf32
+    if hasattr(torch, "set_float32_matmul_precision"):
+        torch.set_float32_matmul_precision("high" if allow_tf32 else "highest")
+    torch.backends.cudnn.benchmark = True
 
 
 def d2nn_mse_loss(output, target, num_classes=10):
@@ -170,6 +197,9 @@ def save_classification_manifest(
     resolved_run_name,
     loss_config,
     last_activation_stats,
+    propagation_backend,
+    propagation_chunk_size,
+    runtime_config,
 ):
     save_manifest(
         manifest_path,
@@ -198,6 +228,9 @@ def save_classification_manifest(
                 activation_hparams=activation_hparams,
                 model_version=MODEL_VERSION,
                 loss_config=loss_config,
+                propagation_backend=propagation_backend,
+                propagation_chunk_size=propagation_chunk_size,
+                runtime_config=runtime_config,
             ),
             "activation_diagnostics": last_activation_stats,
         },
@@ -261,16 +294,24 @@ def build_classification_loaders(args, data_dir, dataset_cfg):
         generator=torch.Generator().manual_seed(args.seed),
     )
 
+    loader_common = {
+        "batch_size": args.batch_size,
+        "num_workers": args.num_workers,
+        "pin_memory": bool(args.pin_memory and torch.cuda.is_available()),
+    }
+    if args.num_workers > 0:
+        loader_common["persistent_workers"] = True
+        loader_common["prefetch_factor"] = args.prefetch_factor
+
     return (
         DataLoader(
             train_set,
-            batch_size=args.batch_size,
             shuffle=True,
-            num_workers=0,
             generator=torch.Generator().manual_seed(args.seed),
+            **loader_common,
         ),
-        DataLoader(val_set, batch_size=args.batch_size, shuffle=False, num_workers=0),
-        DataLoader(test_set, batch_size=args.batch_size, shuffle=False, num_workers=0),
+        DataLoader(val_set, shuffle=False, **loader_common),
+        DataLoader(test_set, shuffle=False, **loader_common),
     )
 
 
@@ -289,6 +330,8 @@ def build_classification_model(args, device):
         activation_type=activation_type,
         activation_positions=activation_positions,
         activation_hparams=activation_hparams,
+        propagation_chunk_size=args.propagation_chunk_size,
+        propagation_backend=args.rs_backend,
     ).to(device)
     return model, optics, activation_type, activation_positions, activation_hparams
 
@@ -303,6 +346,7 @@ def build_classification_run_config(
     activation_hparams,
 ):
     loss_config = {"alpha": args.alpha, "beta": args.beta, "gamma": args.gamma}
+    runtime_config = build_runtime_config(args, torch.device("cuda" if torch.cuda.is_available() else "cpu"))
     resolved_run_name = derive_experiment_run_name(
         run_name=args.run_name,
         experiment_stage=args.experiment_stage,
@@ -311,6 +355,8 @@ def build_classification_run_config(
         activation_hparams=activation_hparams,
         seed=args.seed,
         loss_config=loss_config,
+        propagation_backend=args.rs_backend,
+        propagation_chunk_size=args.propagation_chunk_size,
     )
     checkpoint_path = checkpoint_variant_path(save_dir / dataset_cfg["checkpoint_name"], resolved_run_name)
     manifest_path = checkpoint_manifest_path(checkpoint_path)
@@ -324,6 +370,9 @@ def build_classification_run_config(
         resolved_run_name=resolved_run_name,
         checkpoint_path=checkpoint_path,
         manifest_path=manifest_path,
+        propagation_backend=args.rs_backend,
+        propagation_chunk_size=args.propagation_chunk_size,
+        runtime_config=runtime_config,
     )
 
 
@@ -412,6 +461,9 @@ def finalize_classification_run(
         resolved_run_name=run_config.resolved_run_name,
         loss_config=run_config.loss_config,
         last_activation_stats=last_activation_stats,
+        propagation_backend=run_config.propagation_backend,
+        propagation_chunk_size=run_config.propagation_chunk_size,
+        runtime_config=run_config.runtime_config,
     )
     paper_target = run_config.dataset_cfg["paper_target"]
     paper_target_text = f"{paper_target:.2f}%" if paper_target is not None else "n/a"
@@ -466,6 +518,7 @@ def run_classification_training(args, device, data_dir, save_dir):
 
 def run_training_task(args, device, data_dir, save_dir):
     seed_everything(args.seed)
+    configure_runtime(args, device)
     print(f"Seed: {args.seed}")
     if args.task == "classification":
         run_classification_training(args, device, data_dir, save_dir)
@@ -555,6 +608,23 @@ def build_parser():
     parser.add_argument("--activation-gamma", type=float, default=None)
     parser.add_argument("--activation-responsivity", type=float, default=None)
     parser.add_argument("--activation-emission-phase-mode", type=str, default=None)
+    parser.add_argument(
+        "--rs-backend",
+        type=str,
+        default="direct",
+        choices=["direct", "fft"],
+        help="Rayleigh-Sommerfeld propagation backend used during forward propagation",
+    )
+    parser.add_argument(
+        "--propagation-chunk-size",
+        type=int,
+        default=None,
+        help="direct-backend target chunk size; ignored by the FFT backend",
+    )
+    parser.add_argument("--allow-tf32", action="store_true", help="enable TF32 matmul/cuDNN acceleration on CUDA")
+    parser.add_argument("--num-workers", type=int, default=0, help="DataLoader worker count")
+    parser.add_argument("--pin-memory", action="store_true", help="pin host memory for CUDA transfers")
+    parser.add_argument("--prefetch-factor", type=int, default=2, help="DataLoader prefetch factor when workers > 0")
     parser.add_argument("--wavelength", type=float, default=None)
     parser.add_argument("--layer-distance", type=float, default=None)
     parser.add_argument("--pixel-size", type=float, default=None)
