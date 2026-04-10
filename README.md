@@ -28,7 +28,7 @@ Current detail entrypoints:
 
 Archive root for removed pre-RS artifacts:
 
-- `C:\Users\Jiangqianxian\source\repos\d2nn_artifact_archive\2026-04-09-pre-rs`
+- `～\d2nn_artifact_archive\2026-04-09-pre-rs`
 
 ## Current Training Snapshot
 
