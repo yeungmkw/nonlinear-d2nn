@@ -31,6 +31,7 @@ The lab presets live in `[artifacts.py](../../artifacts.py)` and are selected th
 
 The input/output distances above are the current measured optical path values and now override the older Fresnel-number estimate in the code defaults.
 The remaining `layer_distance` field is still being used only as a provisional inter-layer spacing placeholder until the multi-layer spacing is confirmed separately.
+At the current stage, `lab852_*` is a single-layer-first lab validation path: the formal training workflow is intentionally fixed to `num_layers = 1`, while the underlying multi-layer model implementation is kept for follow-up research after the single-layer feasibility check.
 
 ## Minimum Training Command
 
@@ -72,6 +73,8 @@ Formal BMP output uses:
 - `8-bit grayscale BMP`
 - filename shape: `layer_01_phase_8bit.bmp`
 - mapping rule: wrapped phase in `[0, 2pi)` linearly mapped to grayscale `[0, 255]`
+
+For the current lab-validation stage, the recommended export path is still the single-layer checkpoint produced by the constrained training workflow; multi-layer exports remain available for later research rather than the current feasibility handoff.
 
 Expected minimum artifacts for a single-layer run:
 

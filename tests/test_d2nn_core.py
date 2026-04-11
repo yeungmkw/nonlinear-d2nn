@@ -1647,6 +1647,32 @@ class D2NNCoreTests(unittest.TestCase):
                 checkpoint_path="checkpoints/best_fashion_mnist.stage-lab-single-layer_act-none_optics-lab852-f10_layers-1_seed-42.pth",
             )
 
+    def test_resolve_optics_allows_multilayer_lab_checkpoint_for_followup_research(self):
+        state_dict = {
+            "layers.0.phase": torch.zeros(24, 24),
+            "layers.1.phase": torch.zeros(24, 24),
+        }
+        manifest = {
+            "optics_preset": "lab852_f10",
+            "optical_config": {
+                "wavelength": 852e-9,
+                "layer_distance": 1.17370892018779e-3,
+                "pixel_size": 1e-6,
+                "input_distance": 491.302e-3,
+                "output_distance": 575.304e-3,
+                "num_layers": 2,
+            },
+        }
+        optics = resolve_optics(
+            CLASSIFIER_PAPER_OPTICS,
+            state_dict=state_dict,
+            manifest=manifest,
+            checkpoint_path="checkpoints/best_fashion_mnist.stage-lab-optics-lab852-f10_layers-2_seed-42.pth",
+        )
+        self.assertEqual(optics.num_layers, 2)
+        self.assertEqual(optics.input_distance, 491.302e-3)
+        self.assertEqual(optics.output_distance, 575.304e-3)
+
     def test_quantize_height_map_produces_expected_range(self):
         height_map = torch.tensor([[[0.0, 0.5], [1.0, 0.25]]]).numpy()
         quantized = quantize_height_map(height_map, levels=8)
@@ -1820,6 +1846,45 @@ class D2NNCoreTests(unittest.TestCase):
                         "--export-bmp",
                     ]
                 )
+
+    def test_export_phase_plate_allows_multilayer_lab_checkpoint_for_followup_research(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            checkpoint_path = tmpdir_path / "best_fashion_mnist.stage-lab-optics-lab852-f10_layers-2_seed-42.pth"
+            model = D2NN(**CLASSIFIER_LAB852_F10_OPTICS.with_overrides(size=4, num_layers=2).classifier_model_kwargs())
+            torch.save(model.state_dict(), checkpoint_path)
+            checkpoint_path.with_suffix(".json").write_text(
+                json.dumps(
+                    {
+                        "optics_preset": "lab852_f10",
+                        "optical_config": {
+                            "wavelength": CLASSIFIER_LAB852_F10_OPTICS.wavelength,
+                            "layer_distance": CLASSIFIER_LAB852_F10_OPTICS.layer_distance,
+                            "pixel_size": CLASSIFIER_LAB852_F10_OPTICS.pixel_size,
+                            "input_distance": CLASSIFIER_LAB852_F10_OPTICS.input_distance,
+                            "output_distance": CLASSIFIER_LAB852_F10_OPTICS.output_distance,
+                            "size": 4,
+                            "num_layers": 2,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            export_phase_plate_main(
+                [
+                    "--task",
+                    "classification",
+                    "--checkpoint",
+                    str(checkpoint_path),
+                    "--output-dir",
+                    str(tmpdir_path / "exports"),
+                    "--export-bmp",
+                ]
+            )
+
+            bmp_path = tmpdir_path / "exports" / checkpoint_path.stem / "bmp" / "layer_02_phase_8bit.bmp"
+            self.assertTrue(bmp_path.exists())
 
     def test_final_export_wrapper_default_output_dir_uses_official_date_stamp(self):
         wrapper = importlib.import_module("export_fmnist5_phaseonly_aligned_final")

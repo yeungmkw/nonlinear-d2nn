@@ -216,7 +216,7 @@ def resolve_optics(
                 "manifest optical config. Restore the adjacent .json manifest or pass the optical distances and sizes explicitly."
             )
 
-    return base_optics.with_overrides(
+    resolved = base_optics.with_overrides(
         size=inferred.get("size") if size is None else size,
         num_layers=manifest_optics.get("num_layers", inferred.get("num_layers")) if num_layers is None else num_layers,
         wavelength=manifest_optics.get("wavelength") if wavelength is None else wavelength,
@@ -225,6 +225,7 @@ def resolve_optics(
         input_distance=manifest_optics.get("input_distance") if input_distance is None else input_distance,
         output_distance=manifest_optics.get("output_distance") if output_distance is None else output_distance,
     )
+    return resolved
 
 
 def build_model_for_task(

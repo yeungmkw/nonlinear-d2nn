@@ -170,7 +170,7 @@ uv run python export_phase_plate.py --task classification \
 
 - Global measured defaults now use `wavelength = 852 nm`, `pixel_size = 1 um`, `input_distance = 491.302 mm`, and `output_distance = 575.304 mm`.
 - `lab852_f10` and `lab852_f5` currently only differ in their provisional inter-layer `layer_distance` values (`~1.17 mm` and `~2.35 mm`).
-- The current handoff path is still restricted to classification `--layers 1` runs for the non-paper presets and should not be combined with manual optics overrides.
+- The current lab-validation workflow is restricted to classification `--layers 1` runs for the non-paper presets at training time; this is the formal path for the current single-layer SLM feasibility check.
 - Inter-layer spacing has not been re-measured yet, so multi-layer defaults still preserve their previous `layer_distance` until that value is confirmed.
 - Keep the checkpoint `.json` manifest next to the `.pth` when visualizing/exporting lab runs; that manifest carries the optical config needed to avoid falling back to paper optics.
 
@@ -180,6 +180,8 @@ Run the frozen fabrication export wrapper:
 copy fabrication/fmnist5-phaseonly-aligned.lab.template.json fabrication/fmnist5-phaseonly-aligned.lab.json
 uv run python export_fmnist5_phaseonly_aligned_final.py --lab-config fabrication/fmnist5-phaseonly-aligned.lab.json
 ```
+
+- The frozen `fmnist5-phaseonly-aligned` wrapper remains a historical 5-layer fabrication baseline, not the active lab-validation path for the current single-layer stage.
 
 Preview or run ablation grids:
 
