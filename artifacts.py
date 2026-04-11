@@ -23,6 +23,8 @@ class OpticalConfig:
     wavelength: float
     layer_distance: float
     pixel_size: float
+    input_distance: float
+    output_distance: float
     size: int = 200
     num_layers: int = 5
 
@@ -32,6 +34,8 @@ class OpticalConfig:
         wavelength: float | None = None,
         layer_distance: float | None = None,
         pixel_size: float | None = None,
+        input_distance: float | None = None,
+        output_distance: float | None = None,
         size: int | None = None,
         num_layers: int | None = None,
     ) -> "OpticalConfig":
@@ -39,6 +43,8 @@ class OpticalConfig:
             wavelength=self.wavelength if wavelength is None else wavelength,
             layer_distance=self.layer_distance if layer_distance is None else layer_distance,
             pixel_size=self.pixel_size if pixel_size is None else pixel_size,
+            input_distance=self.input_distance if input_distance is None else input_distance,
+            output_distance=self.output_distance if output_distance is None else output_distance,
             size=self.size if size is None else size,
             num_layers=self.num_layers if num_layers is None else num_layers,
         )
@@ -51,6 +57,8 @@ class OpticalConfig:
             "wavelength": self.wavelength,
             "layer_distance": self.layer_distance,
             "pixel_size": self.pixel_size,
+            "input_distance": self.input_distance,
+            "output_distance": self.output_distance,
         }
 
     def imager_model_kwargs(self, *, input_fraction: float = 0.5) -> dict[str, Any]:
@@ -60,32 +68,42 @@ class OpticalConfig:
             "wavelength": self.wavelength,
             "layer_distance": self.layer_distance,
             "pixel_size": self.pixel_size,
+            "input_distance": self.input_distance,
+            "output_distance": self.output_distance,
             "input_fraction": input_fraction,
         }
 
 
 CLASSIFIER_PAPER_OPTICS = OpticalConfig(
-    wavelength=0.75e-3,
+    wavelength=852e-9,
     layer_distance=30e-3,
-    pixel_size=0.4e-3,
+    pixel_size=1e-6,
+    input_distance=491.302e-3,
+    output_distance=575.304e-3,
 )
 
 CLASSIFIER_LAB852_F10_OPTICS = OpticalConfig(
     wavelength=852e-9,
     layer_distance=1.17370892018779e-3,
     pixel_size=1e-6,
+    input_distance=491.302e-3,
+    output_distance=575.304e-3,
 )
 
 CLASSIFIER_LAB852_F5_OPTICS = OpticalConfig(
     wavelength=852e-9,
     layer_distance=2.34741784037559e-3,
     pixel_size=1e-6,
+    input_distance=491.302e-3,
+    output_distance=575.304e-3,
 )
 
 IMAGER_PAPER_OPTICS = OpticalConfig(
-    wavelength=0.75e-3,
+    wavelength=852e-9,
     layer_distance=4e-3,
-    pixel_size=0.3e-3,
+    pixel_size=1e-6,
+    input_distance=491.302e-3,
+    output_distance=575.304e-3,
 )
 
 
@@ -157,10 +175,28 @@ def resolve_optics(
     wavelength=None,
     layer_distance=None,
     pixel_size=None,
+    input_distance=None,
+    output_distance=None,
 ):
     manifest_optics = (manifest or {}).get("optical_config") or {}
     inferred = infer_architecture(state_dict) if state_dict is not None else {}
     preset_hint = infer_optics_preset_hint(checkpoint_path, manifest=manifest)
+    missing_split_fields = [
+        field_name
+        for field_name, explicit_value in (
+            ("input_distance", input_distance),
+            ("output_distance", output_distance),
+        )
+        if explicit_value is None and manifest_optics and manifest_optics.get(field_name) is None
+    ]
+
+    if missing_split_fields:
+        missing_summary = ", ".join(missing_split_fields)
+        raise ValueError(
+            f"Checkpoint {checkpoint_path or '<in-memory>'} uses a legacy manifest optical config that is missing "
+            f"{missing_summary}. Supply the split distances explicitly or regenerate the checkpoint manifest with "
+            "input/output propagation distances."
+        )
 
     if preset_hint not in (None, "", "paper"):
         missing_fields = [
@@ -169,14 +205,15 @@ def resolve_optics(
                 ("wavelength", wavelength),
                 ("layer_distance", layer_distance),
                 ("pixel_size", pixel_size),
+                ("input_distance", input_distance),
+                ("output_distance", output_distance),
             )
             if explicit_value is None and manifest_optics.get(field_name) is None
         ]
         if missing_fields:
             raise ValueError(
                 f"Checkpoint {checkpoint_path} appears to use optics preset {preset_hint!r} but is missing its checkpoint "
-                "manifest optical config. Restore the adjacent .json manifest or pass --wavelength/--layer-distance/"
-                "--pixel-size explicitly."
+                "manifest optical config. Restore the adjacent .json manifest or pass the optical distances and sizes explicitly."
             )
 
     return base_optics.with_overrides(
@@ -185,6 +222,8 @@ def resolve_optics(
         wavelength=manifest_optics.get("wavelength") if wavelength is None else wavelength,
         layer_distance=manifest_optics.get("layer_distance") if layer_distance is None else layer_distance,
         pixel_size=manifest_optics.get("pixel_size") if pixel_size is None else pixel_size,
+        input_distance=manifest_optics.get("input_distance") if input_distance is None else input_distance,
+        output_distance=manifest_optics.get("output_distance") if output_distance is None else output_distance,
     )
 
 

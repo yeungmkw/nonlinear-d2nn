@@ -659,6 +659,8 @@ def run_classification_visualization(args):
         wavelength=args.wavelength,
         layer_distance=args.layer_distance,
         pixel_size=args.pixel_size,
+        input_distance=args.input_distance,
+        output_distance=args.output_distance,
     )
     activation_type, activation_positions, activation_hparams = resolve_activation_config(manifest=manifest)
     propagation_backend, propagation_chunk_size = resolve_propagation_config(args=args, manifest=manifest)
@@ -826,6 +828,8 @@ def resolve_imaging_optics(args):
         wavelength=args.wavelength,
         layer_distance=args.layer_distance,
         pixel_size=args.pixel_size,
+        input_distance=args.input_distance,
+        output_distance=args.output_distance,
     )
 
 
@@ -1053,6 +1057,8 @@ def run_imaging_visualization(args):
         wavelength=args.wavelength,
         layer_distance=args.layer_distance,
         pixel_size=args.pixel_size,
+        input_distance=args.input_distance,
+        output_distance=args.output_distance,
     )
     activation_type, activation_positions, activation_hparams = resolve_activation_config(manifest=manifest)
     propagation_backend, propagation_chunk_size = resolve_propagation_config(args=args, manifest=manifest)

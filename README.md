@@ -154,7 +154,7 @@ uv run python export_phase_plate.py --task classification \
     --checkpoint checkpoints/best_fashion_mnist.pth --export-stl
 ```
 
-Single-layer lab path (`852 nm`, `1 um`, Fresnel-number heuristics):
+Single-layer lab path (`852 nm`, `1 um`, measured input/output distances):
 
 ```bash
 uv run python train.py --task classification --dataset fashion-mnist \
@@ -168,11 +168,10 @@ uv run python export_phase_plate.py --task classification \
     --checkpoint checkpoints/<single-layer-run>.pth --export-bmp
 ```
 
-- `lab852_f10`: `wavelength = 852 nm`, `pixel_size = 1 um`, `layer_distance ~= 1.17 mm`
-- `lab852_f5`: `wavelength = 852 nm`, `pixel_size = 1 um`, `layer_distance ~= 2.35 mm`
-- These distances assume half-aperture `a = (size * pixel_size) / 2` and `F = a^2 / (lambda z)`.
-- The lab presets are fixed to `--size 200`; changing aperture size would invalidate the stated Fresnel-number mapping.
-- In the current handoff path, the lab presets are intentionally restricted to classification `--layers 1` runs and should not be combined with manual optics overrides.
+- Global measured defaults now use `wavelength = 852 nm`, `pixel_size = 1 um`, `input_distance = 491.302 mm`, and `output_distance = 575.304 mm`.
+- `lab852_f10` and `lab852_f5` currently only differ in their provisional inter-layer `layer_distance` values (`~1.17 mm` and `~2.35 mm`).
+- The current handoff path is still restricted to classification `--layers 1` runs for the non-paper presets and should not be combined with manual optics overrides.
+- Inter-layer spacing has not been re-measured yet, so multi-layer defaults still preserve their previous `layer_distance` until that value is confirmed.
 - Keep the checkpoint `.json` manifest next to the `.pth` when visualizing/exporting lab runs; that manifest carries the optical config needed to avoid falling back to paper optics.
 
 Run the frozen fabrication export wrapper:

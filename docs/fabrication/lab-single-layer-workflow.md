@@ -8,7 +8,8 @@ Freeze a `1-layer` classification path that uses:
 
 - `wavelength = 852 nm`
 - `pixel_size = 1 um`
-- explicit Fresnel-distance presets
+- `input_distance = 491.302 mm`
+- `output_distance = 575.304 mm`
 - formal BMP export for SLM loading
 
 ## Presets
@@ -18,19 +19,18 @@ The lab presets live in `[artifacts.py](../../artifacts.py)` and are selected th
 - `lab852_f10`
   - `wavelength = 852e-9`
   - `pixel_size = 1e-6`
-  - `layer_distance ~= 1.1737 mm`
+  - `input_distance = 491.302e-3`
+  - `output_distance = 575.304e-3`
+  - provisional `layer_distance ~= 1.1737 mm`
 - `lab852_f5`
   - `wavelength = 852e-9`
   - `pixel_size = 1e-6`
-  - `layer_distance ~= 2.3474 mm`
+  - `input_distance = 491.302e-3`
+  - `output_distance = 575.304e-3`
+  - provisional `layer_distance ~= 2.3474 mm`
 
-These distances assume half-aperture `a = (size * pixel_size) / 2` and Fresnel number
-`F = a^2 / (lambda z)`, so `z = a^2 / (F lambda)`.
-
-For `size = 200`, `pixel_size = 1 um`, `lambda = 852 nm`:
-
-- `F ~= 10 -> z ~= 1.17 mm`
-- `F ~= 5 -> z ~= 2.35 mm`
+The input/output distances above are the current measured optical path values and now override the older Fresnel-number estimate in the code defaults.
+The remaining `layer_distance` field is still being used only as a provisional inter-layer spacing placeholder until the multi-layer spacing is confirmed separately.
 
 ## Minimum Training Command
 
@@ -47,6 +47,7 @@ Recommended first smoke target:
 - `size = 200`
 - `optics-preset = lab852_f10`
 - `phase-only`, meaning no activation flags
+- use the measured `input_distance/output_distance` from the preset rather than the older single-distance heuristic
 
 ## Visualization
 

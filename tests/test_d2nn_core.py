@@ -142,6 +142,11 @@ class D2NNCoreTests(unittest.TestCase):
         args = build_parser().parse_args(["--optics-preset", "lab852_f10"])
         self.assertEqual(args.optics_preset, "lab852_f10")
 
+    def test_train_parser_accepts_input_and_output_distance_overrides(self):
+        args = build_parser().parse_args(["--input-distance", "0.491302", "--output-distance", "0.575304"])
+        self.assertEqual(args.input_distance, 0.491302)
+        self.assertEqual(args.output_distance, 0.575304)
+
     def test_validate_training_args_rejects_lab_preset_for_imaging(self):
         args = build_parser().parse_args(["--task", "imaging", "--optics-preset", "lab852_f10"])
         with self.assertRaisesRegex(ValueError, "only supported for classification"):
@@ -169,9 +174,32 @@ class D2NNCoreTests(unittest.TestCase):
         self.assertEqual(args.rs_backend, "fft")
         self.assertEqual(args.propagation_chunk_size, 96)
 
+    def test_visualize_parser_accepts_input_and_output_distance_overrides(self):
+        args = build_visualize_parser().parse_args(
+            ["--checkpoint", "checkpoints/demo.pth", "--input-distance", "0.491302", "--output-distance", "0.575304"]
+        )
+        self.assertEqual(args.input_distance, 0.491302)
+        self.assertEqual(args.output_distance, 0.575304)
+
     def test_export_phase_plate_parser_accepts_export_bmp_flag(self):
         args = build_export_parser().parse_args(["--task", "classification", "--checkpoint", "demo.pth", "--export-bmp"])
         self.assertTrue(args.export_bmp)
+
+    def test_export_phase_plate_parser_accepts_input_and_output_distance_overrides(self):
+        args = build_export_parser().parse_args(
+            [
+                "--task",
+                "classification",
+                "--checkpoint",
+                "demo.pth",
+                "--input-distance",
+                "0.491302",
+                "--output-distance",
+                "0.575304",
+            ]
+        )
+        self.assertEqual(args.input_distance, 0.491302)
+        self.assertEqual(args.output_distance, 0.575304)
 
     def test_train_module_exposes_classification_training_core(self):
         train_module = importlib.import_module("train")
@@ -264,6 +292,7 @@ class D2NNCoreTests(unittest.TestCase):
     def test_diffractive_layer_uses_rs_propagation_modules(self):
         model = D2NN(**CLASSIFIER_PAPER_OPTICS.with_overrides(size=24, num_layers=2).classifier_model_kwargs())
         self.assertIsInstance(model.network, DiffractiveNetwork)
+        self.assertIsInstance(model.input_propagation, RayleighSommerfeldPropagation)
         self.assertIsInstance(model.layers[0].propagation, RayleighSommerfeldPropagation)
         self.assertIsInstance(model.network.output_propagation, RayleighSommerfeldPropagation)
         self.assertFalse(hasattr(model.layers[0], "H"))
@@ -276,14 +305,22 @@ class D2NNCoreTests(unittest.TestCase):
             propagation_backend="fft",
             propagation_chunk_size=128,
         )
+        self.assertEqual(model.input_propagation.backend, "fft")
         self.assertEqual(model.layers[0].propagation.backend, "fft")
         self.assertEqual(model.output_propagation.backend, "fft")
         self.assertEqual(model.layers[0].propagation.chunk_size, 128)
 
+    def test_d2nn_uses_separate_input_and_output_propagation_distances(self):
+        optics = CLASSIFIER_PAPER_OPTICS.with_overrides(size=24, num_layers=3)
+        model = D2NN(**optics.classifier_model_kwargs())
+        self.assertAlmostEqual(model.input_propagation.distance, optics.input_distance)
+        self.assertAlmostEqual(model.layers[0].propagation.distance, optics.layer_distance)
+        self.assertAlmostEqual(model.output_propagation.distance, optics.output_distance)
+
     def test_diffractive_layer_checkpoints_propagation_during_training(self):
         import d2nn as d2nn_module
 
-        layer = D2NN(**CLASSIFIER_PAPER_OPTICS.with_overrides(size=16, num_layers=1).classifier_model_kwargs()).layers[0]
+        layer = D2NN(**CLASSIFIER_PAPER_OPTICS.with_overrides(size=16, num_layers=2).classifier_model_kwargs()).layers[0]
         x = torch.ones(1, 16, 16, dtype=torch.cfloat, requires_grad=True)
 
         with unittest.mock.patch.object(
@@ -294,7 +331,7 @@ class D2NNCoreTests(unittest.TestCase):
             loss = layer(x).real.sum()
             loss.backward()
 
-        checkpoint_mock.assert_called_once()
+        self.assertEqual(checkpoint_mock.call_count, 1)
 
     def test_diffractive_network_checkpoints_output_propagation_during_training(self):
         import d2nn as d2nn_module
@@ -303,8 +340,14 @@ class D2NNCoreTests(unittest.TestCase):
             def forward(self, u):
                 return u
 
+        input_propagation = IdentityPropagation()
         output_propagation = IdentityPropagation()
-        network = DiffractiveNetwork(layers=[], output_propagation=output_propagation, activations={})
+        network = DiffractiveNetwork(
+            layers=[],
+            input_propagation=input_propagation,
+            output_propagation=output_propagation,
+            activations={},
+        )
         x = torch.ones(1, 8, 8, dtype=torch.cfloat, requires_grad=True)
 
         with unittest.mock.patch.object(
@@ -315,7 +358,7 @@ class D2NNCoreTests(unittest.TestCase):
             loss = network(x).real.sum()
             loss.backward()
 
-        checkpoint_mock.assert_called_once()
+        self.assertEqual(checkpoint_mock.call_count, 2)
 
     def test_classifier_even_detector_size_is_respected(self):
         detector_size = 4
@@ -874,11 +917,19 @@ class D2NNCoreTests(unittest.TestCase):
         self.assertIsNone(run_name)
 
     def test_lab852_optics_preset_keeps_paper_defaults_unchanged(self):
-        self.assertEqual(CLASSIFIER_PAPER_OPTICS.wavelength, 0.75e-3)
-        self.assertEqual(CLASSIFIER_PAPER_OPTICS.pixel_size, 0.4e-3)
+        self.assertEqual(CLASSIFIER_PAPER_OPTICS.wavelength, 852e-9)
+        self.assertEqual(CLASSIFIER_PAPER_OPTICS.pixel_size, 1e-6)
+        self.assertEqual(CLASSIFIER_PAPER_OPTICS.input_distance, 491.302e-3)
+        self.assertEqual(CLASSIFIER_PAPER_OPTICS.output_distance, 575.304e-3)
         self.assertEqual(CLASSIFIER_LAB852_F10_OPTICS.wavelength, 852e-9)
         self.assertEqual(CLASSIFIER_LAB852_F10_OPTICS.pixel_size, 1e-6)
+        self.assertEqual(CLASSIFIER_LAB852_F10_OPTICS.input_distance, 491.302e-3)
+        self.assertEqual(CLASSIFIER_LAB852_F10_OPTICS.output_distance, 575.304e-3)
         self.assertEqual(CLASSIFIER_LAB852_F5_OPTICS.layer_distance, 2.34741784037559e-3)
+        self.assertEqual(IMAGER_PAPER_OPTICS.wavelength, 852e-9)
+        self.assertEqual(IMAGER_PAPER_OPTICS.pixel_size, 1e-6)
+        self.assertEqual(IMAGER_PAPER_OPTICS.input_distance, 491.302e-3)
+        self.assertEqual(IMAGER_PAPER_OPTICS.output_distance, 575.304e-3)
 
     def test_train_parser_accepts_seed_and_experiment_stage(self):
         args = build_parser().parse_args(["--seed", "7", "--experiment-stage", "placement_ablation"])
@@ -1556,6 +1607,8 @@ class D2NNCoreTests(unittest.TestCase):
                 "wavelength": 852e-9,
                 "layer_distance": 1.17370892018779e-3,
                 "pixel_size": 1e-6,
+                "input_distance": 491.302e-3,
+                "output_distance": 575.304e-3,
                 "num_layers": 1,
             }
         }
@@ -1563,7 +1616,27 @@ class D2NNCoreTests(unittest.TestCase):
         self.assertEqual(optics.wavelength, 852e-9)
         self.assertEqual(optics.layer_distance, 1.17370892018779e-3)
         self.assertEqual(optics.pixel_size, 1e-6)
+        self.assertEqual(optics.input_distance, 491.302e-3)
+        self.assertEqual(optics.output_distance, 575.304e-3)
         self.assertEqual(optics.num_layers, 1)
+
+    def test_resolve_optics_rejects_legacy_manifest_without_split_distances(self):
+        state_dict = {"layers.0.phase": torch.zeros(24, 24)}
+        legacy_manifest = {
+            "optical_config": {
+                "wavelength": 0.75e-3,
+                "layer_distance": 30e-3,
+                "pixel_size": 0.4e-3,
+                "num_layers": 1,
+            }
+        }
+        with self.assertRaisesRegex(ValueError, "input_distance.*output_distance"):
+            resolve_optics(
+                CLASSIFIER_PAPER_OPTICS,
+                state_dict=state_dict,
+                manifest=legacy_manifest,
+                checkpoint_path="checkpoints/best_fashion_mnist.legacy-paper.pth",
+            )
 
     def test_resolve_optics_rejects_lab_named_checkpoint_without_manifest(self):
         state_dict = {"layers.0.phase": torch.zeros(24, 24)}
@@ -1703,6 +1776,8 @@ class D2NNCoreTests(unittest.TestCase):
                         "wavelength": CLASSIFIER_LAB852_F10_OPTICS.wavelength,
                         "layer_distance": CLASSIFIER_LAB852_F10_OPTICS.layer_distance,
                         "pixel_size": CLASSIFIER_LAB852_F10_OPTICS.pixel_size,
+                        "input_distance": CLASSIFIER_LAB852_F10_OPTICS.input_distance,
+                        "output_distance": CLASSIFIER_LAB852_F10_OPTICS.output_distance,
                         "size": 4,
                         "num_layers": 1,
                     },
@@ -1771,11 +1846,15 @@ class D2NNCoreTests(unittest.TestCase):
         self.assertIn("--task", command)
         self.assertIn("classification", command)
         self.assertIn("--wavelength", command)
-        self.assertIn("0.00075", command)
+        self.assertIn("8.52e-07", command)
         self.assertIn("--layer-distance", command)
         self.assertIn("0.03", command)
         self.assertIn("--pixel-size", command)
-        self.assertIn("0.0004", command)
+        self.assertIn("1e-06", command)
+        self.assertIn("--input-distance", command)
+        self.assertIn("0.491302", command)
+        self.assertIn("--output-distance", command)
+        self.assertIn("0.575304", command)
         self.assertIn("--export-stl", command)
 
     def test_final_export_wrapper_loads_lab_config(self):
@@ -1807,6 +1886,44 @@ class D2NNCoreTests(unittest.TestCase):
             self.assertEqual(config["max_relief_um"], 950.0)
             self.assertEqual(config["quantization_levels"], 256)
             self.assertTrue(config["export_stl"])
+
+    def test_final_export_wrapper_rejects_bootstrap_from_legacy_source_manifest(self):
+        wrapper = importlib.import_module("export_fmnist5_phaseonly_aligned_final")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir)
+            artifact_dir = repo_root / "docs" / "official-artifacts" / "fmnist5-phaseonly-aligned"
+            artifact_dir.mkdir(parents=True)
+            np.save(
+                artifact_dir / "phase_masks.npy",
+                np.zeros(
+                    (
+                        wrapper.OFFICIAL_PRESET["layers"],
+                        wrapper.OFFICIAL_PRESET["size"],
+                        wrapper.OFFICIAL_PRESET["size"],
+                    ),
+                    dtype=np.float32,
+                ),
+            )
+            (artifact_dir / "source_checkpoint_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "optical_config": {
+                            "wavelength": 0.75e-3,
+                            "layer_distance": 30e-3,
+                            "pixel_size": 0.4e-3,
+                            "size": wrapper.OFFICIAL_PRESET["size"],
+                            "num_layers": wrapper.OFFICIAL_PRESET["layers"],
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "legacy optical config"):
+                wrapper.bootstrap_checkpoint_from_official_artifacts(
+                    repo_root,
+                    repo_root / wrapper.OFFICIAL_PRESET["checkpoint"],
+                )
 
     def test_final_export_wrapper_loads_lab_config_with_utf8_bom(self):
         wrapper = importlib.import_module("export_fmnist5_phaseonly_aligned_final")

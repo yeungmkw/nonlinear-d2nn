@@ -354,6 +354,7 @@ class DiffractiveLayer(nn.Module):
         wavelength,
         layer_distance,
         pixel_size,
+        propagate=True,
         propagation_chunk_size=None,
         propagation_backend="direct",
     ):
@@ -362,16 +363,19 @@ class DiffractiveLayer(nn.Module):
         self.wavelength = float(wavelength)
         self.layer_distance = float(layer_distance)
         self.pixel_size = float(pixel_size)
+        self.propagate = bool(propagate)
 
         self.phase = nn.Parameter(torch.randn(size, size) * 0.05)
-        self.propagation = RayleighSommerfeldPropagation(
-            size=size,
-            wavelength=wavelength,
-            distance=layer_distance,
-            pixel_size=pixel_size,
-            chunk_size=propagation_chunk_size,
-            backend=propagation_backend,
-        )
+        self.propagation = None
+        if self.propagate:
+            self.propagation = RayleighSommerfeldPropagation(
+                size=size,
+                wavelength=wavelength,
+                distance=layer_distance,
+                pixel_size=pixel_size,
+                chunk_size=propagation_chunk_size,
+                backend=propagation_backend,
+            )
 
     def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
         key = f"{prefix}H"
@@ -382,18 +386,22 @@ class DiffractiveLayer(nn.Module):
     def forward(self, u):
         modulation = torch.exp(1j * self.phase)
         u = u * modulation.unsqueeze(0)
+        if self.propagation is None:
+            return u
         return checkpointed_module_forward(self.propagation, u)
 
 
 class DiffractiveNetwork:
     """Applies diffractive layers, optional activations, then a final free-space propagation."""
 
-    def __init__(self, layers, output_propagation, activations=None):
+    def __init__(self, layers, input_propagation, output_propagation, activations=None):
         self.layers = layers
+        self.input_propagation = input_propagation
         self.output_propagation = output_propagation
         self.activations = activations if activations is not None else {}
 
     def __call__(self, u):
+        u = checkpointed_module_forward(self.input_propagation, u)
         for layer_idx, layer in enumerate(self.layers, start=1):
             u = layer(u)
             key = str(layer_idx)
@@ -462,6 +470,8 @@ class D2NNBase(nn.Module):
         wavelength,
         layer_distance,
         pixel_size,
+        input_distance,
+        output_distance,
         activation_type="none",
         activation_positions=None,
         activation_hparams=None,
@@ -481,10 +491,11 @@ class D2NNBase(nn.Module):
                     wavelength,
                     layer_distance,
                     pixel_size,
+                    propagate=layer_index < (num_layers - 1),
                     propagation_chunk_size=propagation_chunk_size,
                     propagation_backend=propagation_backend,
                 )
-                for _ in range(num_layers)
+                for layer_index in range(num_layers)
             ]
         )
         self.activations = nn.ModuleDict()
@@ -493,15 +504,23 @@ class D2NNBase(nn.Module):
                 activation = build_activation_module(self.activation_type, self.activation_hparams)
                 if activation is not None:
                     self.activations[str(position)] = activation
-        self.output_propagation = RayleighSommerfeldPropagation(
+        self.input_propagation = RayleighSommerfeldPropagation(
             size=size,
             wavelength=wavelength,
-            distance=layer_distance,
+            distance=input_distance,
             pixel_size=pixel_size,
             chunk_size=propagation_chunk_size,
             backend=propagation_backend,
         )
-        self.network = DiffractiveNetwork(self.layers, self.output_propagation, self.activations)
+        self.output_propagation = RayleighSommerfeldPropagation(
+            size=size,
+            wavelength=wavelength,
+            distance=output_distance,
+            pixel_size=pixel_size,
+            chunk_size=propagation_chunk_size,
+            backend=propagation_backend,
+        )
+        self.network = DiffractiveNetwork(self.layers, self.input_propagation, self.output_propagation, self.activations)
 
     def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
         key = f"{prefix}H_out"
@@ -540,9 +559,11 @@ class D2NN(D2NNBase):
         num_layers=5,
         size=200,
         num_classes=10,
-        wavelength=0.75e-3,
+        wavelength=852e-9,
         layer_distance=30e-3,
-        pixel_size=0.4e-3,
+        pixel_size=1e-6,
+        input_distance=491.302e-3,
+        output_distance=575.304e-3,
         detector_size=None,
         activation_type="none",
         activation_positions=None,
@@ -556,6 +577,8 @@ class D2NN(D2NNBase):
             wavelength=wavelength,
             layer_distance=layer_distance,
             pixel_size=pixel_size,
+            input_distance=input_distance,
+            output_distance=output_distance,
             activation_type=activation_type,
             activation_positions=activation_positions,
             activation_hparams=activation_hparams,
@@ -612,9 +635,11 @@ class D2NNImager(D2NNBase):
         self,
         num_layers=5,
         size=200,
-        wavelength=0.75e-3,
+        wavelength=852e-9,
         layer_distance=4e-3,
-        pixel_size=0.3e-3,
+        pixel_size=1e-6,
+        input_distance=491.302e-3,
+        output_distance=575.304e-3,
         input_fraction=0.5,
         activation_type="none",
         activation_positions=None,
@@ -628,6 +653,8 @@ class D2NNImager(D2NNBase):
             wavelength=wavelength,
             layer_distance=layer_distance,
             pixel_size=pixel_size,
+            input_distance=input_distance,
+            output_distance=output_distance,
             activation_type=activation_type,
             activation_positions=activation_positions,
             activation_hparams=activation_hparams,

@@ -116,9 +116,18 @@ def validate_training_args(args):
     if args.size != 200:
         raise ValueError("The current lab optics presets are calibrated for size 200 and cannot be combined with --size overrides.")
 
-    if any(value is not None for value in (args.wavelength, args.layer_distance, args.pixel_size)):
+    if any(
+        value is not None
+        for value in (
+            args.wavelength,
+            args.layer_distance,
+            args.pixel_size,
+            args.input_distance,
+            args.output_distance,
+        )
+    ):
         raise ValueError(
-            "When using a lab optics preset, do not override --wavelength/--layer-distance/--pixel-size manually."
+            "When using a lab optics preset, do not override --wavelength/--layer-distance/--pixel-size/--input-distance/--output-distance manually."
         )
 
 
@@ -251,6 +260,8 @@ def build_classification_model(args, device):
         wavelength=args.wavelength,
         layer_distance=args.layer_distance,
         pixel_size=args.pixel_size,
+        input_distance=args.input_distance,
+        output_distance=args.output_distance,
     )
     activation_type, activation_positions, activation_hparams = resolve_activation_config(args)
     model = build_model_for_task(
@@ -560,6 +571,8 @@ def build_parser():
     parser.add_argument("--wavelength", type=float, default=None)
     parser.add_argument("--layer-distance", type=float, default=None)
     parser.add_argument("--pixel-size", type=float, default=None)
+    parser.add_argument("--input-distance", type=float, default=None)
+    parser.add_argument("--output-distance", type=float, default=None)
     parser.add_argument(
         "--optics-preset",
         type=str,

@@ -48,6 +48,8 @@ def build_parser():
     parser.add_argument("--wavelength", type=float, default=None)
     parser.add_argument("--layer-distance", type=float, default=None)
     parser.add_argument("--pixel-size", type=float, default=None)
+    parser.add_argument("--input-distance", type=float, default=None)
+    parser.add_argument("--output-distance", type=float, default=None)
     parser.add_argument("--input-fraction", type=float, default=0.5)
     parser.add_argument("--refractive-index", type=float, default=1.7227)
     parser.add_argument("--ambient-index", type=float, default=1.0)
@@ -77,6 +79,8 @@ def main(argv=None):
         wavelength=args.wavelength,
         layer_distance=args.layer_distance,
         pixel_size=args.pixel_size,
+        input_distance=args.input_distance,
+        output_distance=args.output_distance,
     )
 
     device = torch.device("cpu")

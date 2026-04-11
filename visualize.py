@@ -46,6 +46,8 @@ def build_parser():
     parser.add_argument("--wavelength", type=float, default=None)
     parser.add_argument("--layer-distance", type=float, default=None)
     parser.add_argument("--pixel-size", type=float, default=None)
+    parser.add_argument("--input-distance", type=float, default=None)
+    parser.add_argument("--output-distance", type=float, default=None)
     return parser
 
 

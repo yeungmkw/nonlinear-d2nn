@@ -30,9 +30,11 @@ OFFICIAL_PRESET = {
     "checkpoint": Path("checkpoints/best_fashion_mnist.fmnist5-phaseonly-aligned.pth"),
     "size": 200,
     "layers": 5,
-    "wavelength": 0.00075,
+    "wavelength": 852e-9,
     "layer_distance": 0.03,
-    "pixel_size": 0.0004,
+    "pixel_size": 1e-6,
+    "input_distance": 491.302e-3,
+    "output_distance": 575.304e-3,
 }
 
 REQUIRED_EXPORT_FILES = (
@@ -54,6 +56,39 @@ REQUIRED_LAB_FIELDS = (
     "max_relief_um",
     "quantization_levels",
 )
+
+
+def _load_source_manifest(repo_root: Path) -> tuple[Path, dict]:
+    source_manifest_path = repo_root / OFFICIAL_ARTIFACT_DIR / "source_checkpoint_manifest.json"
+    source_manifest = {}
+    if source_manifest_path.exists():
+        source_manifest = json.loads(source_manifest_path.read_text(encoding="utf-8"))
+    return source_manifest_path, source_manifest
+
+
+def _assert_bootstrap_optics_match_official(source_manifest: dict) -> None:
+    source_optics = dict(source_manifest.get("optical_config") or {})
+    if not source_optics:
+        return
+
+    expected_fields = ("wavelength", "layer_distance", "pixel_size", "input_distance", "output_distance")
+    mismatched = []
+    for field_name in expected_fields:
+        source_value = source_optics.get(field_name)
+        expected_value = OFFICIAL_PRESET[field_name]
+        if source_value is None or source_value != expected_value:
+            mismatched.append((field_name, source_value, expected_value))
+
+    if mismatched:
+        details = ", ".join(
+            f"{field_name}={source_value!r} (expected {expected_value!r})"
+            for field_name, source_value, expected_value in mismatched
+        )
+        raise ValueError(
+            "Cannot bootstrap the frozen export checkpoint from legacy optical config: "
+            + details
+            + ". Refresh the official checkpoint/artifacts under the current measured optics first."
+        )
 
 
 def build_default_output_dir(*, current_date: date | None = None) -> Path:
@@ -93,6 +128,10 @@ def build_export_command(
         str(OFFICIAL_PRESET["layer_distance"]),
         "--pixel-size",
         str(OFFICIAL_PRESET["pixel_size"]),
+        "--input-distance",
+        str(OFFICIAL_PRESET["input_distance"]),
+        "--output-distance",
+        str(OFFICIAL_PRESET["output_distance"]),
         "--refractive-index",
         str(refractive_index),
         "--ambient-index",
@@ -126,6 +165,8 @@ def bootstrap_checkpoint_from_official_artifacts(repo_root: Path, checkpoint_pat
     phase_masks_path = artifact_dir / "phase_masks.npy"
     if not phase_masks_path.exists():
         return False
+    _, source_manifest = _load_source_manifest(repo_root)
+    _assert_bootstrap_optics_match_official(source_manifest)
 
     phase_masks = np.load(phase_masks_path)
     expected_shape = (
@@ -145,6 +186,8 @@ def bootstrap_checkpoint_from_official_artifacts(repo_root: Path, checkpoint_pat
         wavelength=OFFICIAL_PRESET["wavelength"],
         layer_distance=OFFICIAL_PRESET["layer_distance"],
         pixel_size=OFFICIAL_PRESET["pixel_size"],
+        input_distance=OFFICIAL_PRESET["input_distance"],
+        output_distance=OFFICIAL_PRESET["output_distance"],
     )
     model = build_model_for_task(OFFICIAL_PRESET["task"], optics)
     with torch.no_grad():
@@ -158,10 +201,7 @@ def bootstrap_checkpoint_from_official_artifacts(repo_root: Path, checkpoint_pat
 
 
 def _write_bootstrap_manifest(repo_root: Path, checkpoint_path: Path) -> None:
-    source_manifest_path = repo_root / OFFICIAL_ARTIFACT_DIR / "source_checkpoint_manifest.json"
-    source_manifest = {}
-    if source_manifest_path.exists():
-        source_manifest = json.loads(source_manifest_path.read_text(encoding="utf-8"))
+    source_manifest_path, source_manifest = _load_source_manifest(repo_root)
 
     payload = {
         "task": OFFICIAL_PRESET["task"],
@@ -174,6 +214,8 @@ def _write_bootstrap_manifest(repo_root: Path, checkpoint_path: Path) -> None:
             "wavelength": OFFICIAL_PRESET["wavelength"],
             "layer_distance": OFFICIAL_PRESET["layer_distance"],
             "pixel_size": OFFICIAL_PRESET["pixel_size"],
+            "input_distance": OFFICIAL_PRESET["input_distance"],
+            "output_distance": OFFICIAL_PRESET["output_distance"],
             "size": OFFICIAL_PRESET["size"],
             "num_layers": OFFICIAL_PRESET["layers"],
         },
