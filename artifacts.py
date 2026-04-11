@@ -70,11 +70,49 @@ CLASSIFIER_PAPER_OPTICS = OpticalConfig(
     pixel_size=0.4e-3,
 )
 
+CLASSIFIER_LAB852_F10_OPTICS = OpticalConfig(
+    wavelength=852e-9,
+    layer_distance=1.17370892018779e-3,
+    pixel_size=1e-6,
+)
+
+CLASSIFIER_LAB852_F5_OPTICS = OpticalConfig(
+    wavelength=852e-9,
+    layer_distance=2.34741784037559e-3,
+    pixel_size=1e-6,
+)
+
 IMAGER_PAPER_OPTICS = OpticalConfig(
     wavelength=0.75e-3,
     layer_distance=4e-3,
     pixel_size=0.3e-3,
 )
+
+
+CLASSIFICATION_OPTICS_PRESETS = {
+    "paper": CLASSIFIER_PAPER_OPTICS,
+    "lab852_f10": CLASSIFIER_LAB852_F10_OPTICS,
+    "lab852_f5": CLASSIFIER_LAB852_F5_OPTICS,
+}
+
+IMAGING_OPTICS_PRESETS = {
+    "paper": IMAGER_PAPER_OPTICS,
+}
+
+
+def infer_optics_preset_hint(checkpoint_path, manifest=None) -> str | None:
+    manifest_preset = (manifest or {}).get("optics_preset")
+    if manifest_preset:
+        return str(manifest_preset)
+
+    if checkpoint_path is None:
+        return None
+
+    stem = Path(checkpoint_path).stem.lower().replace("-", "_")
+    for preset_name in CLASSIFICATION_OPTICS_PRESETS:
+        if preset_name != "paper" and preset_name in stem:
+            return preset_name
+    return None
 
 
 def configure_matplotlib_backend(no_show=False):
@@ -112,19 +150,41 @@ def resolve_optics(
     base_optics: OpticalConfig,
     *,
     state_dict=None,
+    manifest=None,
+    checkpoint_path=None,
     size=None,
     num_layers=None,
     wavelength=None,
     layer_distance=None,
     pixel_size=None,
 ):
+    manifest_optics = (manifest or {}).get("optical_config") or {}
     inferred = infer_architecture(state_dict) if state_dict is not None else {}
+    preset_hint = infer_optics_preset_hint(checkpoint_path, manifest=manifest)
+
+    if preset_hint not in (None, "", "paper"):
+        missing_fields = [
+            field_name
+            for field_name, explicit_value in (
+                ("wavelength", wavelength),
+                ("layer_distance", layer_distance),
+                ("pixel_size", pixel_size),
+            )
+            if explicit_value is None and manifest_optics.get(field_name) is None
+        ]
+        if missing_fields:
+            raise ValueError(
+                f"Checkpoint {checkpoint_path} appears to use optics preset {preset_hint!r} but is missing its checkpoint "
+                "manifest optical config. Restore the adjacent .json manifest or pass --wavelength/--layer-distance/"
+                "--pixel-size explicitly."
+            )
+
     return base_optics.with_overrides(
         size=inferred.get("size") if size is None else size,
-        num_layers=inferred.get("num_layers") if num_layers is None else num_layers,
-        wavelength=wavelength,
-        layer_distance=layer_distance,
-        pixel_size=pixel_size,
+        num_layers=manifest_optics.get("num_layers", inferred.get("num_layers")) if num_layers is None else num_layers,
+        wavelength=manifest_optics.get("wavelength") if wavelength is None else wavelength,
+        layer_distance=manifest_optics.get("layer_distance") if layer_distance is None else layer_distance,
+        pixel_size=manifest_optics.get("pixel_size") if pixel_size is None else pixel_size,
     )
 
 
@@ -159,6 +219,20 @@ def build_model_for_task(
             propagation_backend=propagation_backend,
         )
     raise ValueError(f"Unsupported task: {task}")
+
+
+def resolve_training_optics_preset(task: str, preset_name: str) -> OpticalConfig:
+    if task == "classification":
+        presets = CLASSIFICATION_OPTICS_PRESETS
+    elif task == "imaging":
+        presets = IMAGING_OPTICS_PRESETS
+    else:
+        raise ValueError(f"Unsupported task: {task}")
+
+    if preset_name not in presets:
+        valid = ", ".join(sorted(presets))
+        raise ValueError(f"Unsupported optics preset {preset_name!r} for task {task!r}. Expected one of: {valid}")
+    return presets[preset_name]
 
 
 def checkpoint_manifest_path(checkpoint_path):
@@ -198,6 +272,8 @@ def derive_experiment_run_name(
     loss_config: dict[str, Any] | None = None,
     propagation_backend: str | None = None,
     propagation_chunk_size: int | None = None,
+    optics_preset: str | None = None,
+    layer_count: int | None = None,
 ):
     if run_name:
         return run_name
@@ -209,13 +285,27 @@ def derive_experiment_run_name(
     )
 
     has_nondefault_propagation = (propagation_backend not in (None, "", "direct")) or (propagation_chunk_size is not None)
+    has_nondefault_optics = optics_preset not in (None, "", "paper")
+    has_nondefault_topology = layer_count not in (None, 5)
 
-    if activation_type in (None, "", "none") and not has_nondefault_loss_config and not has_nondefault_propagation:
+    if (
+        activation_type in (None, "", "none")
+        and not has_nondefault_loss_config
+        and not has_nondefault_propagation
+        and not has_nondefault_optics
+        and not has_nondefault_topology
+    ):
         return None
 
     stage_label = (experiment_stage or "nonlinear").replace("_", "-")
     activation_label = str(activation_type or "none").replace("_", "-")
     parts = [f"stage-{stage_label}", f"act-{activation_label}"]
+
+    if optics_preset not in (None, "", "paper"):
+        parts.append(f"optics-{_format_run_value(optics_preset)}")
+
+    if layer_count not in (None, 5):
+        parts.append(f"layers-{int(layer_count)}")
 
     if activation_positions:
         position_token = "-".join(str(int(position)) for position in activation_positions)
@@ -284,6 +374,7 @@ def experiment_manifest_fields(
     propagation_backend=None,
     propagation_chunk_size=None,
     runtime_config=None,
+    optics_preset=None,
 ):
     payload = {
         "checkpoint": str(Path(checkpoint_path)),
@@ -298,6 +389,7 @@ def experiment_manifest_fields(
         "propagation_backend": propagation_backend,
         "propagation_chunk_size": propagation_chunk_size,
         "runtime_config": dict(runtime_config or {}),
+        "optics_preset": optics_preset,
     }
     if optics is not None:
         payload["optical_config"] = optical_config_dict(optics)
@@ -416,6 +508,12 @@ def quantize_phase_masks_uniform(phase_masks, levels: int):
     step = (2 * np.pi) / levels
     quantized = torch.round(wrapped / step) * step
     return torch.remainder(quantized, 2 * np.pi)
+
+
+def phase_masks_to_bmp_uint8(phase_masks: np.ndarray) -> np.ndarray:
+    wrapped = np.mod(np.asarray(phase_masks), 2 * np.pi)
+    scaled = np.rint((wrapped / (2 * np.pi)) * 255.0)
+    return np.clip(scaled, 0, 255).astype(np.uint8)
 
 
 def build_layer_stats(

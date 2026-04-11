@@ -23,10 +23,13 @@ python_paths.txt
 data/
 checkpoints/
 exports/
+checkpoints_smoke*/
+exports_smoke*/
 
 # Generated figures are gitignored by default; selected representative figures
 # are committed explicitly and tracked via git add -f
 figures/
+figures_smoke*/
 
 *.log
 pytest.log

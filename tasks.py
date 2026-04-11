@@ -30,7 +30,17 @@ from artifacts import (
     quantize_phase_masks_uniform,
     read_checkpoint_manifest,
     resolve_optics,
+    resolve_training_optics_preset,
     save_manifest,
+)
+from train_core import (
+    append_metric_history,
+    build_metric_history,
+    classification_composite_loss,
+    d2nn_mse_loss,
+    evaluate_classification,
+    is_better_classification_checkpoint,
+    phase_smoothness_regularizer,
 )
 
 
@@ -202,42 +212,6 @@ def classification_split_lengths(total_train_size, val_size=5000):
     if total_train_size <= val_size:
         raise ValueError(f"Training set size {total_train_size} must exceed val_size {val_size}")
     return total_train_size - val_size, val_size
-
-
-def d2nn_mse_loss(output, target, num_classes=10):
-    from train import d2nn_mse_loss as _impl
-
-    return _impl(output, target, num_classes=num_classes)
-
-
-def phase_smoothness_regularizer(model):
-    from train import phase_smoothness_regularizer as _impl
-
-    return _impl(model)
-
-
-def classification_composite_loss(result, target, model, alpha=1.0, beta=0.1, gamma=0.01):
-    from train import classification_composite_loss as _impl
-
-    return _impl(result, target, model, alpha=alpha, beta=beta, gamma=gamma)
-
-
-def build_metric_history():
-    from train import build_metric_history as _impl
-
-    return _impl()
-
-
-def append_metric_history(history, *, split, total, mse, ce, reg, accuracy, contrast):
-    from train import append_metric_history as _impl
-
-    return _impl(history, split=split, total=total, mse=mse, ce=ce, reg=reg, accuracy=accuracy, contrast=contrast)
-
-
-def is_better_classification_checkpoint(candidate, best):
-    from train import is_better_classification_checkpoint as _impl
-
-    return _impl(candidate, best)
 
 
 def resolve_experiment_seed(explicit_seed, manifest=None, default=42):
@@ -468,6 +442,7 @@ def build_experiment_grid(grid_name, args):
         "alpha": args.alpha,
         "beta": args.beta,
         "gamma": args.gamma,
+        "optics_preset": args.optics_preset,
     }
 
     if grid_name == "coherent_amplitude_positions":
@@ -558,6 +533,7 @@ def format_experiment_grid_commands(grid_name, args):
             f"--batch-size {spec['batch_size']}",
             f"--lr {spec['lr']}",
             f"--seed {spec['seed']}",
+            f"--optics-preset {spec['optics_preset']}",
             f"--alpha {spec['alpha']}",
             f"--beta {spec['beta']}",
             f"--gamma {spec['gamma']}",
@@ -577,25 +553,6 @@ def execute_experiment_grid(grid_name, args, runner):
         for key, value in spec.items():
             setattr(spec_args, key, value)
         runner(spec_args)
-
-
-def train_classification_one_epoch(model, loader, optimizer, device, alpha=1.0, beta=0.1, gamma=0.01):
-    from train import _run_classification_epoch
-
-    return _run_classification_epoch(model, loader, device, optimizer=optimizer, alpha=alpha, beta=beta, gamma=gamma)
-
-
-@torch.no_grad()
-def evaluate_classification(model, loader, device, alpha=1.0, beta=0.1, gamma=0.01):
-    from train import _run_classification_epoch
-
-    return _run_classification_epoch(model, loader, device, optimizer=None, alpha=alpha, beta=beta, gamma=gamma)
-
-
-def run_classification_training(args, device, data_dir, save_dir):
-    from train import run_classification_training as _impl
-
-    return _impl(args, device, data_dir, save_dir)
 
 
 @torch.no_grad()
@@ -695,6 +652,8 @@ def run_classification_visualization(args):
     optics = resolve_optics(
         CLASSIFIER_PAPER_OPTICS,
         state_dict=state_dict,
+        manifest=manifest,
+        checkpoint_path=args.checkpoint,
         size=args.size,
         num_layers=args.layers,
         wavelength=args.wavelength,
@@ -861,7 +820,7 @@ def evaluate_imaging(model, loader, criterion, device):
 
 def resolve_imaging_optics(args):
     return resolve_optics(
-        IMAGER_PAPER_OPTICS,
+        resolve_training_optics_preset("imaging", args.optics_preset),
         size=args.size,
         num_layers=args.layers,
         wavelength=args.wavelength,
@@ -927,6 +886,8 @@ def run_imaging_training(args, device, data_dir, save_dir):
         seed=args.seed,
         propagation_backend=propagation_backend,
         propagation_chunk_size=propagation_chunk_size,
+        optics_preset=args.optics_preset,
+        layer_count=args.layers,
     )
     checkpoint_path = checkpoint_variant_path(save_dir / dataset_cfg["checkpoint_name"], resolved_run_name)
     manifest_path = checkpoint_manifest_path(checkpoint_path)
@@ -982,6 +943,7 @@ def run_imaging_training(args, device, data_dir, save_dir):
                 model_version=MODEL_VERSION,
                 propagation_backend=propagation_backend,
                 propagation_chunk_size=propagation_chunk_size,
+                optics_preset=args.optics_preset,
                 runtime_config={
                     "device": str(device),
                     "allow_tf32": bool(getattr(args, "allow_tf32", False) and device.type == "cuda"),
@@ -1084,6 +1046,8 @@ def run_imaging_visualization(args):
     optics = resolve_optics(
         IMAGER_PAPER_OPTICS,
         state_dict=state_dict,
+        manifest=manifest,
+        checkpoint_path=args.checkpoint,
         size=args.size,
         num_layers=args.layers,
         wavelength=args.wavelength,

@@ -8,6 +8,7 @@ dependencies = [
     "torchvision>=0.15",
     "numpy",
     "matplotlib",
+    "Pillow",
 ]
 
 [project.optional-dependencies]

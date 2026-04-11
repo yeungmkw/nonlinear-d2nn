@@ -154,6 +154,27 @@ uv run python export_phase_plate.py --task classification \
     --checkpoint checkpoints/best_fashion_mnist.pth --export-stl
 ```
 
+Single-layer lab path (`852 nm`, `1 um`, Fresnel-number heuristics):
+
+```bash
+uv run python train.py --task classification --dataset fashion-mnist \
+    --epochs 1 --size 200 --layers 1 --seed 42 \
+    --optics-preset lab852_f10 --experiment-stage lab_single_layer
+
+uv run python visualize.py --task classification --dataset fashion-mnist \
+    --checkpoint checkpoints/<single-layer-run>.pth --no-show
+
+uv run python export_phase_plate.py --task classification \
+    --checkpoint checkpoints/<single-layer-run>.pth --export-bmp
+```
+
+- `lab852_f10`: `wavelength = 852 nm`, `pixel_size = 1 um`, `layer_distance ~= 1.17 mm`
+- `lab852_f5`: `wavelength = 852 nm`, `pixel_size = 1 um`, `layer_distance ~= 2.35 mm`
+- These distances assume half-aperture `a = (size * pixel_size) / 2` and `F = a^2 / (lambda z)`.
+- The lab presets are fixed to `--size 200`; changing aperture size would invalidate the stated Fresnel-number mapping.
+- In the current handoff path, the lab presets are intentionally restricted to classification `--layers 1` runs and should not be combined with manual optics overrides.
+- Keep the checkpoint `.json` manifest next to the `.pth` when visualizing/exporting lab runs; that manifest carries the optical config needed to avoid falling back to paper optics.
+
 Run the frozen fabrication export wrapper:
 
 ```bash
@@ -178,6 +199,7 @@ If you need the current fabrication-target line first:
 - [docs/official-artifacts/fmnist5-phaseonly-aligned/](docs/official-artifacts/fmnist5-phaseonly-aligned/)
 - [docs/fabrication/fashion-mnist-phase-only-lightpath-protocol.md](docs/fabrication/fashion-mnist-phase-only-lightpath-protocol.md)
 - [docs/fabrication/fashion-mnist-phase-only-lab-handoff.md](docs/fabrication/fashion-mnist-phase-only-lab-handoff.md)
+- [docs/fabrication/lab-single-layer-workflow.md](docs/fabrication/lab-single-layer-workflow.md)
 
 If you need detailed experiment numbers:
 

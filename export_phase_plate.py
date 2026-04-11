@@ -15,6 +15,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from PIL import Image
 
 from artifacts import (
     CLASSIFIER_PAPER_OPTICS,
@@ -26,7 +27,9 @@ from artifacts import (
     export_height_map_to_ascii_stl,
     load_checkpoint_state_dict,
     optical_config_dict,
+    phase_masks_to_bmp_uint8,
     quantize_height_map,
+    read_checkpoint_manifest,
     resolve_optics,
     save_layer_csvs,
     save_manifest,
@@ -35,7 +38,7 @@ from artifacts import (
 from d2nn import phase_to_height_map
 
 
-def main():
+def build_parser():
     parser = argparse.ArgumentParser(description="Export phase masks / height maps from a trained D2NN checkpoint")
     parser.add_argument("--task", choices=["classification", "imaging"], required=True)
     parser.add_argument("--checkpoint", type=str, required=True)
@@ -52,15 +55,23 @@ def main():
     parser.add_argument("--base-thickness-um", type=float, default=500.0)
     parser.add_argument("--max-relief-um", type=float, default=None)
     parser.add_argument("--export-stl", action="store_true")
-    args = parser.parse_args()
+    parser.add_argument("--export-bmp", action="store_true")
+    return parser
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
 
     checkpoint_path = Path(args.checkpoint)
     state_dict = load_checkpoint_state_dict(checkpoint_path, map_location="cpu")
+    checkpoint_manifest = read_checkpoint_manifest(checkpoint_path)
 
     base_optics = CLASSIFIER_PAPER_OPTICS if args.task == "classification" else IMAGER_PAPER_OPTICS
     optics = resolve_optics(
         base_optics,
         state_dict=state_dict,
+        manifest=checkpoint_manifest,
+        checkpoint_path=checkpoint_path,
         size=args.size,
         num_layers=args.layers,
         wavelength=args.wavelength,
@@ -102,6 +113,13 @@ def main():
     quantized_height_map = quantize_height_map(manufacturable_relief, args.quantization_levels)
     np.save(quantized_path, quantized_height_map)
     save_layer_csvs(export_root, phase_masks, manufacturable_relief, thickness_map, quantized_height_map)
+
+    if args.export_bmp:
+        bmp_dir = export_root / "bmp"
+        bmp_dir.mkdir(parents=True, exist_ok=True)
+        bmp_layers = phase_masks_to_bmp_uint8(phase_masks)
+        for idx, layer_bmp in enumerate(bmp_layers):
+            Image.fromarray(layer_bmp, mode="L").save(bmp_dir / f"layer_{idx + 1:02d}_phase_8bit.bmp")
 
     if args.export_stl:
         stl_dir = export_root / "stl"
@@ -154,10 +172,16 @@ def main():
                 "base_thickness_um": args.base_thickness_um,
                 "max_relief_um": args.max_relief_um,
                 "export_stl": args.export_stl,
+                "export_bmp": args.export_bmp,
+            },
+            "bmp_export": {
+                "enabled": args.export_bmp,
+                "mapping": "[0, 2pi) phase linearly mapped to [0, 255] grayscale",
             },
             "quantization_levels": args.quantization_levels,
             "layer_stats": layer_stats,
             "fabrication_readiness": fabrication_readiness,
+            "source_checkpoint_manifest": checkpoint_manifest,
             "notes": "height_map assumes transmissive phase-only plates with wrapped phase in [0, 2pi).",
         },
     )
@@ -169,6 +193,8 @@ def main():
     print(f"Saved quantized height map to: {quantized_path}")
     print(f"Saved per-layer CSVs under: {export_root / 'layers'}")
     print(f"Saved export report to: {export_root / 'report.md'}")
+    if args.export_bmp:
+        print(f"Saved per-layer BMP files under: {export_root / 'bmp'}")
     if args.export_stl:
         print(f"Saved per-layer STL files under: {export_root / 'stl'}")
 

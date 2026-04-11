@@ -9,17 +9,16 @@ import random
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader
 
 from artifacts import (
-    CLASSIFIER_PAPER_OPTICS,
     build_model_for_task,
     checkpoint_manifest_path,
     checkpoint_variant_path,
     derive_experiment_run_name,
     experiment_manifest_fields,
+    resolve_training_optics_preset,
     save_manifest,
 )
 from tasks import (
@@ -33,6 +32,15 @@ from tasks import (
     model_activation_diagnostics,
     resolve_activation_config,
     run_imaging_training,
+)
+from train_core import (
+    _run_classification_epoch,
+    append_metric_history,
+    build_metric_history,
+    classification_composite_loss,
+    d2nn_mse_loss,
+    is_better_classification_checkpoint,
+    phase_smoothness_regularizer,
 )
 
 
@@ -60,6 +68,7 @@ class ClassificationRunConfig:
     propagation_backend: str
     propagation_chunk_size: int | None
     runtime_config: dict
+    optics_preset: str
 
 
 def seed_everything(seed):
@@ -94,52 +103,23 @@ def configure_runtime(args, device):
     torch.backends.cudnn.benchmark = True
 
 
-def d2nn_mse_loss(output, target, num_classes=10):
-    output_norm = output / (output.sum(dim=1, keepdim=True) + 1e-8)
-    target_onehot = F.one_hot(target, num_classes).float()
-    return F.mse_loss(output_norm, target_onehot)
+def validate_training_args(args):
+    if args.optics_preset == "paper":
+        return
 
+    if args.task != "classification":
+        raise ValueError("Non-paper optics presets are only supported for classification runs in the current lab path.")
 
-def phase_smoothness_regularizer(model):
-    penalties = []
-    for layer in getattr(model, "layers", ()):
-        phase = layer.phase
-        horizontal_delta = torch.atan2(torch.sin(phase[:, 1:] - phase[:, :-1]), torch.cos(phase[:, 1:] - phase[:, :-1]))
-        vertical_delta = torch.atan2(torch.sin(phase[1:, :] - phase[:-1, :]), torch.cos(phase[1:, :] - phase[:-1, :]))
-        penalties.append(horizontal_delta.pow(2).mean())
-        penalties.append(vertical_delta.pow(2).mean())
-    if not penalties:
-        reference = next(model.parameters(), None)
-        device = reference.device if reference is not None else "cpu"
-        return torch.tensor(0.0, device=device)
-    return torch.stack(penalties).mean()
+    if args.layers != 1:
+        raise ValueError("The current lab optics presets are restricted to single-layer (--layers 1) runs.")
 
+    if args.size != 200:
+        raise ValueError("The current lab optics presets are calibrated for size 200 and cannot be combined with --size overrides.")
 
-def classification_composite_loss(result, target, model, alpha=1.0, beta=0.1, gamma=0.01):
-    scores = result["scores"]
-    num_classes = scores.shape[1]
-    mse = d2nn_mse_loss(scores, target, num_classes=num_classes)
-    ce = F.cross_entropy(result["logits"], target)
-    reg = phase_smoothness_regularizer(model)
-    total = alpha * mse + beta * ce + gamma * reg
-    return {"total": total, "mse": mse, "ce": ce, "reg": reg}
-
-
-def build_metric_history():
-    return {
-        "train": {"loss": [], "mse": [], "ce": [], "reg": [], "accuracy": [], "contrast": []},
-        "val": {"loss": [], "mse": [], "ce": [], "reg": [], "accuracy": [], "contrast": []},
-    }
-
-
-def append_metric_history(history, *, split, total, mse, ce, reg, accuracy, contrast):
-    bucket = history[split]
-    bucket["loss"].append(float(total))
-    bucket["mse"].append(float(mse))
-    bucket["ce"].append(float(ce))
-    bucket["reg"].append(float(reg))
-    bucket["accuracy"].append(float(accuracy))
-    bucket["contrast"].append(float(contrast))
+    if any(value is not None for value in (args.wavelength, args.layer_distance, args.pixel_size)):
+        raise ValueError(
+            "When using a lab optics preset, do not override --wavelength/--layer-distance/--pixel-size manually."
+        )
 
 
 def append_epoch_history(history, train_metrics, val_metrics):
@@ -154,14 +134,6 @@ def append_epoch_history(history, train_metrics, val_metrics):
             accuracy=metrics["accuracy"],
             contrast=metrics["contrast"],
         )
-
-
-def is_better_classification_checkpoint(candidate, best):
-    if candidate["accuracy"] != best["accuracy"]:
-        return candidate["accuracy"] > best["accuracy"]
-    if candidate["contrast"] != best["contrast"]:
-        return candidate["contrast"] > best["contrast"]
-    return candidate["epoch"] > best["epoch"]
 
 
 def maybe_save_best_classification_checkpoint(model, checkpoint_path, val_metrics, epoch, best_checkpoint_metrics):
@@ -228,58 +200,14 @@ def save_classification_manifest(
                 activation_hparams=activation_hparams,
                 model_version=MODEL_VERSION,
                 loss_config=loss_config,
-                propagation_backend=propagation_backend,
-                propagation_chunk_size=propagation_chunk_size,
-                runtime_config=runtime_config,
-            ),
+            propagation_backend=propagation_backend,
+            propagation_chunk_size=propagation_chunk_size,
+            runtime_config=runtime_config,
+            optics_preset=args.optics_preset,
+        ),
             "activation_diagnostics": last_activation_stats,
         },
     )
-
-
-def _run_classification_epoch(model, loader, device, *, optimizer=None, alpha=1.0, beta=0.1, gamma=0.01):
-    training = optimizer is not None
-    model.train(mode=training)
-    total_loss = 0.0
-    total_mse = 0.0
-    total_ce = 0.0
-    total_reg = 0.0
-    total_contrast = 0.0
-    correct = 0
-    total = 0
-
-    with torch.set_grad_enabled(training):
-        for batch_idx, (data, target) in enumerate(loader):
-            data, target = data.to(device), target.to(device)
-            if training:
-                optimizer.zero_grad()
-
-            result = model.forward_with_metrics(data, target=target)
-            loss_terms = classification_composite_loss(result, target, model, alpha=alpha, beta=beta, gamma=gamma)
-            if training:
-                loss_terms["total"].backward()
-                optimizer.step()
-
-            total_loss += loss_terms["total"].item() * data.size(0)
-            total_mse += loss_terms["mse"].item() * data.size(0)
-            total_ce += loss_terms["ce"].item() * data.size(0)
-            total_reg += loss_terms["reg"].item() * data.size(0)
-            total_contrast += result["contrast"].mean().item() * data.size(0)
-            pred = result["scores"].argmax(dim=1)
-            correct += pred.eq(target).sum().item()
-            total += data.size(0)
-
-            if training and (batch_idx + 1) % 100 == 0:
-                print(f"  batch {batch_idx + 1}/{len(loader)}, loss: {loss_terms['total'].item():.4f}")
-
-    return {
-        "loss": total_loss / total,
-        "mse": total_mse / total,
-        "ce": total_ce / total,
-        "reg": total_reg / total,
-        "accuracy": 100.0 * correct / total,
-        "contrast": total_contrast / total,
-    }
 
 
 def build_classification_loaders(args, data_dir, dataset_cfg):
@@ -316,7 +244,8 @@ def build_classification_loaders(args, data_dir, dataset_cfg):
 
 
 def build_classification_model(args, device):
-    optics = CLASSIFIER_PAPER_OPTICS.with_overrides(
+    base_optics = resolve_training_optics_preset("classification", args.optics_preset)
+    optics = base_optics.with_overrides(
         size=args.size,
         num_layers=args.layers,
         wavelength=args.wavelength,
@@ -357,6 +286,8 @@ def build_classification_run_config(
         loss_config=loss_config,
         propagation_backend=args.rs_backend,
         propagation_chunk_size=args.propagation_chunk_size,
+        optics_preset=args.optics_preset,
+        layer_count=args.layers,
     )
     checkpoint_path = checkpoint_variant_path(save_dir / dataset_cfg["checkpoint_name"], resolved_run_name)
     manifest_path = checkpoint_manifest_path(checkpoint_path)
@@ -373,6 +304,7 @@ def build_classification_run_config(
         propagation_backend=args.rs_backend,
         propagation_chunk_size=args.propagation_chunk_size,
         runtime_config=runtime_config,
+        optics_preset=args.optics_preset,
     )
 
 
@@ -628,6 +560,13 @@ def build_parser():
     parser.add_argument("--wavelength", type=float, default=None)
     parser.add_argument("--layer-distance", type=float, default=None)
     parser.add_argument("--pixel-size", type=float, default=None)
+    parser.add_argument(
+        "--optics-preset",
+        type=str,
+        default="paper",
+        choices=["paper", "lab852_f10", "lab852_f5"],
+        help="named optics preset; lab presets are fixed to classification, --layers 1, --size 200, and no manual optics overrides",
+    )
     return parser
 
 
@@ -635,6 +574,7 @@ def main(argv=None):
     args = build_parser().parse_args(argv)
     if args.task == "imaging" and args.dataset == "mnist":
         args.dataset = "stl10"
+    validate_training_args(args)
     if args.print_experiment_grid:
         for command in format_experiment_grid_commands(args.print_experiment_grid, args):
             print(command)

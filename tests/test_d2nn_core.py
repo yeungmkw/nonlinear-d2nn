@@ -13,6 +13,8 @@ import torch
 from PIL import Image
 
 from artifacts import (
+    CLASSIFIER_LAB852_F10_OPTICS,
+    CLASSIFIER_LAB852_F5_OPTICS,
     CLASSIFIER_PAPER_OPTICS,
     IMAGER_PAPER_OPTICS,
     apply_manufacturing_profile,
@@ -26,6 +28,7 @@ from artifacts import (
     experiment_manifest_fields,
     export_height_map_to_ascii_stl,
     infer_architecture,
+    phase_masks_to_bmp_uint8,
     quantize_height_map,
     read_manifest,
     resolve_optics,
@@ -49,7 +52,10 @@ from d2nn import (
     phase_to_height_map,
     safe_abs,
 )
-from train import build_parser
+from export_phase_plate import build_parser as build_export_parser
+from export_phase_plate import main as export_phase_plate_main
+from train import build_parser, validate_training_args
+from train_core import evaluate_classification as evaluate_classification_core
 from tasks import (
     append_metric_history,
     build_classification_transform,
@@ -83,6 +89,13 @@ class D2NNCoreTests(unittest.TestCase):
             "## References",
         ):
             self.assertIn(section, content)
+
+    def test_readme_mentions_single_layer_lab_commands(self):
+        readme = Path(__file__).resolve().parents[1] / "README.md"
+        content = readme.read_text(encoding="utf-8")
+        self.assertIn("--layers 1", content)
+        self.assertIn("--optics-preset lab852_f10", content)
+        self.assertIn("--export-bmp", content)
 
     def test_cli_entrypoints_expose_help(self):
         repo_root = Path(__file__).resolve().parents[1]
@@ -125,12 +138,40 @@ class D2NNCoreTests(unittest.TestCase):
         self.assertTrue(args.pin_memory)
         self.assertEqual(args.prefetch_factor, 4)
 
+    def test_train_parser_accepts_optics_preset_choice(self):
+        args = build_parser().parse_args(["--optics-preset", "lab852_f10"])
+        self.assertEqual(args.optics_preset, "lab852_f10")
+
+    def test_validate_training_args_rejects_lab_preset_for_imaging(self):
+        args = build_parser().parse_args(["--task", "imaging", "--optics-preset", "lab852_f10"])
+        with self.assertRaisesRegex(ValueError, "only supported for classification"):
+            validate_training_args(args)
+
+    def test_validate_training_args_rejects_multi_layer_lab_preset(self):
+        args = build_parser().parse_args(["--optics-preset", "lab852_f10", "--layers", "5"])
+        with self.assertRaisesRegex(ValueError, "single-layer"):
+            validate_training_args(args)
+
+    def test_validate_training_args_rejects_manual_optics_override_for_lab_preset(self):
+        args = build_parser().parse_args(["--optics-preset", "lab852_f10", "--layers", "1", "--wavelength", "1e-6"])
+        with self.assertRaisesRegex(ValueError, "do not override"):
+            validate_training_args(args)
+
+    def test_validate_training_args_rejects_noncanonical_size_for_lab_preset(self):
+        args = build_parser().parse_args(["--optics-preset", "lab852_f10", "--layers", "1", "--size", "256"])
+        with self.assertRaisesRegex(ValueError, "size 200"):
+            validate_training_args(args)
+
     def test_visualize_parser_accepts_rs_override_flags(self):
         args = build_visualize_parser().parse_args(
             ["--checkpoint", "checkpoints/demo.pth", "--rs-backend", "fft", "--propagation-chunk-size", "96"]
         )
         self.assertEqual(args.rs_backend, "fft")
         self.assertEqual(args.propagation_chunk_size, 96)
+
+    def test_export_phase_plate_parser_accepts_export_bmp_flag(self):
+        args = build_export_parser().parse_args(["--task", "classification", "--checkpoint", "demo.pth", "--export-bmp"])
+        self.assertTrue(args.export_bmp)
 
     def test_train_module_exposes_classification_training_core(self):
         train_module = importlib.import_module("train")
@@ -156,12 +197,36 @@ class D2NNCoreTests(unittest.TestCase):
     def test_tasks_module_exposes_both_task_families(self):
         tasks = importlib.import_module("tasks")
         for name in (
-            "run_classification_training",
             "run_classification_visualization",
             "run_imaging_training",
             "run_imaging_visualization",
+            "classification_composite_loss",
+            "evaluate_classification",
         ):
             self.assertTrue(hasattr(tasks, name), f"tasks missing {name}")
+
+    def test_tasks_module_does_not_import_train_textually(self):
+        tasks_path = Path(__file__).resolve().parents[1] / "tasks.py"
+        content = tasks_path.read_text(encoding="utf-8")
+        self.assertNotIn("from train import", content)
+
+    def test_train_core_exposes_shared_classification_helpers(self):
+        train_core = importlib.import_module("train_core")
+        for name in (
+            "d2nn_mse_loss",
+            "phase_smoothness_regularizer",
+            "classification_composite_loss",
+            "build_metric_history",
+            "append_metric_history",
+            "is_better_classification_checkpoint",
+            "evaluate_classification",
+        ):
+            self.assertTrue(hasattr(train_core, name), f"train_core missing {name}")
+
+    def test_tasks_evaluate_classification_reexports_train_core_helper(self):
+        import tasks
+
+        self.assertIs(tasks.evaluate_classification, evaluate_classification_core)
 
     def test_get_classification_dataset_config_supports_cifar10_gray_alias(self):
         cfg = get_classification_dataset_config("cifar10-gray")
@@ -716,6 +781,20 @@ class D2NNCoreTests(unittest.TestCase):
         self.assertIn("chunk-128", run_name)
         self.assertIn("seed-7", run_name)
 
+    def test_derive_experiment_run_name_encodes_lab_single_layer_config(self):
+        run_name = derive_experiment_run_name(
+            run_name=None,
+            experiment_stage="lab_single_layer",
+            activation_type="none",
+            seed=42,
+            optics_preset="lab852_f10",
+            layer_count=1,
+        )
+        self.assertIn("lab-single-layer", run_name)
+        self.assertIn("optics-lab852-f10", run_name)
+        self.assertIn("layers-1", run_name)
+        self.assertIn("seed-42", run_name)
+
     def test_derive_experiment_run_name_encodes_nonlinear_identity(self):
         run_name = derive_experiment_run_name(
             run_name=None,
@@ -749,6 +828,7 @@ class D2NNCoreTests(unittest.TestCase):
             activation_type="none",
             activation_positions=(),
             activation_hparams={},
+            optics_preset="paper",
         )
         self.assertEqual(payload["checkpoint"], str(Path("checkpoints/best_fashion_mnist.pth")))
         self.assertEqual(payload["run_name"], "baseline_5layer")
@@ -758,6 +838,7 @@ class D2NNCoreTests(unittest.TestCase):
         self.assertEqual(payload["activation_type"], "none")
         self.assertEqual(payload["activation_positions"], [])
         self.assertEqual(payload["activation_hparams"], {})
+        self.assertEqual(payload["optics_preset"], "paper")
 
     def test_experiment_manifest_fields_include_model_version_and_loss_config(self):
         payload = experiment_manifest_fields(
@@ -774,12 +855,14 @@ class D2NNCoreTests(unittest.TestCase):
             propagation_backend="fft",
             propagation_chunk_size=128,
             runtime_config={"allow_tf32": True},
+            optics_preset="lab852_f5",
         )
         self.assertEqual(payload["model_version"], "rs_v1")
         self.assertEqual(payload["loss_config"], {"alpha": 1.0, "beta": 0.1, "gamma": 0.01})
         self.assertEqual(payload["propagation_backend"], "fft")
         self.assertEqual(payload["propagation_chunk_size"], 128)
         self.assertEqual(payload["runtime_config"], {"allow_tf32": True})
+        self.assertEqual(payload["optics_preset"], "lab852_f5")
 
     def test_derive_experiment_run_name_keeps_canonical_baseline_for_default_loss_config(self):
         run_name = derive_experiment_run_name(
@@ -789,6 +872,13 @@ class D2NNCoreTests(unittest.TestCase):
             loss_config={"alpha": 1.0, "beta": 0.1, "gamma": 0.01},
         )
         self.assertIsNone(run_name)
+
+    def test_lab852_optics_preset_keeps_paper_defaults_unchanged(self):
+        self.assertEqual(CLASSIFIER_PAPER_OPTICS.wavelength, 0.75e-3)
+        self.assertEqual(CLASSIFIER_PAPER_OPTICS.pixel_size, 0.4e-3)
+        self.assertEqual(CLASSIFIER_LAB852_F10_OPTICS.wavelength, 852e-9)
+        self.assertEqual(CLASSIFIER_LAB852_F10_OPTICS.pixel_size, 1e-6)
+        self.assertEqual(CLASSIFIER_LAB852_F5_OPTICS.layer_distance, 2.34741784037559e-3)
 
     def test_train_parser_accepts_seed_and_experiment_stage(self):
         args = build_parser().parse_args(["--seed", "7", "--experiment-stage", "placement_ablation"])
@@ -1459,12 +1549,46 @@ class D2NNCoreTests(unittest.TestCase):
         self.assertEqual(optics.size, 24)
         self.assertEqual(optics.num_layers, 2)
 
+    def test_resolve_optics_uses_manifest_optical_config_when_present(self):
+        state_dict = {"layers.0.phase": torch.zeros(24, 24)}
+        manifest = {
+            "optical_config": {
+                "wavelength": 852e-9,
+                "layer_distance": 1.17370892018779e-3,
+                "pixel_size": 1e-6,
+                "num_layers": 1,
+            }
+        }
+        optics = resolve_optics(CLASSIFIER_PAPER_OPTICS, state_dict=state_dict, manifest=manifest)
+        self.assertEqual(optics.wavelength, 852e-9)
+        self.assertEqual(optics.layer_distance, 1.17370892018779e-3)
+        self.assertEqual(optics.pixel_size, 1e-6)
+        self.assertEqual(optics.num_layers, 1)
+
+    def test_resolve_optics_rejects_lab_named_checkpoint_without_manifest(self):
+        state_dict = {"layers.0.phase": torch.zeros(24, 24)}
+        with self.assertRaisesRegex(ValueError, "missing its checkpoint manifest"):
+            resolve_optics(
+                CLASSIFIER_PAPER_OPTICS,
+                state_dict=state_dict,
+                checkpoint_path="checkpoints/best_fashion_mnist.stage-lab-single-layer_act-none_optics-lab852-f10_layers-1_seed-42.pth",
+            )
+
     def test_quantize_height_map_produces_expected_range(self):
         height_map = torch.tensor([[[0.0, 0.5], [1.0, 0.25]]]).numpy()
         quantized = quantize_height_map(height_map, levels=8)
         self.assertEqual(quantized.dtype, "uint16")
         self.assertEqual(int(quantized.min()), 0)
         self.assertEqual(int(quantized.max()), 7)
+
+    def test_phase_masks_to_bmp_uint8_maps_wrapped_phase_to_0_255(self):
+        phase_masks = np.array([[[0.0, np.pi], [1.5 * np.pi, (2 * np.pi) - 1e-6]]], dtype=np.float32)
+        bmp = phase_masks_to_bmp_uint8(phase_masks)
+        self.assertEqual(bmp.dtype, np.uint8)
+        self.assertEqual(int(bmp[0, 0, 0]), 0)
+        self.assertEqual(int(bmp[0, 0, 1]), 128)
+        self.assertGreaterEqual(int(bmp[0, 1, 0]), 191)
+        self.assertEqual(int(bmp.max()), 255)
 
     def test_build_layer_stats_matches_layer_count(self):
         phase_masks = torch.zeros(3, 4, 4).numpy()
@@ -1563,6 +1687,64 @@ class D2NNCoreTests(unittest.TestCase):
             content = path.read_text(encoding="utf-8")
             self.assertIn("solid layer_01", content)
             self.assertIn("facet normal", content)
+
+    def test_export_phase_plate_can_write_bmp_for_single_layer_checkpoint(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            checkpoint_path = tmpdir_path / "demo_single_layer.pth"
+            model = D2NN(**CLASSIFIER_LAB852_F10_OPTICS.with_overrides(size=4, num_layers=1).classifier_model_kwargs())
+            torch.save(model.state_dict(), checkpoint_path)
+            save_manifest(
+                checkpoint_manifest_path(checkpoint_path),
+                {
+                    "task": "classification",
+                    "optics_preset": "lab852_f10",
+                    "optical_config": {
+                        "wavelength": CLASSIFIER_LAB852_F10_OPTICS.wavelength,
+                        "layer_distance": CLASSIFIER_LAB852_F10_OPTICS.layer_distance,
+                        "pixel_size": CLASSIFIER_LAB852_F10_OPTICS.pixel_size,
+                        "size": 4,
+                        "num_layers": 1,
+                    },
+                },
+            )
+
+            export_phase_plate_main(
+                [
+                    "--task",
+                    "classification",
+                    "--checkpoint",
+                    str(checkpoint_path),
+                    "--output-dir",
+                    str(tmpdir_path / "exports"),
+                    "--export-bmp",
+                ]
+            )
+
+            bmp_path = tmpdir_path / "exports" / checkpoint_path.stem / "bmp" / "layer_01_phase_8bit.bmp"
+            self.assertTrue(bmp_path.exists())
+
+    def test_export_phase_plate_rejects_lab_named_checkpoint_without_manifest(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            checkpoint_path = (
+                tmpdir_path / "best_fashion_mnist.stage-lab-single-layer_act-none_optics-lab852-f10_layers-1_seed-42.pth"
+            )
+            model = D2NN(**CLASSIFIER_LAB852_F10_OPTICS.with_overrides(size=4, num_layers=1).classifier_model_kwargs())
+            torch.save(model.state_dict(), checkpoint_path)
+
+            with self.assertRaisesRegex(ValueError, "missing its checkpoint manifest"):
+                export_phase_plate_main(
+                    [
+                        "--task",
+                        "classification",
+                        "--checkpoint",
+                        str(checkpoint_path),
+                        "--output-dir",
+                        str(tmpdir_path / "exports"),
+                        "--export-bmp",
+                    ]
+                )
 
     def test_final_export_wrapper_default_output_dir_uses_official_date_stamp(self):
         wrapper = importlib.import_module("export_fmnist5_phaseonly_aligned_final")
