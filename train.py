@@ -3,7 +3,6 @@ D2NN unified training entrypoint.
 """
 
 import argparse
-from dataclasses import dataclass
 from pathlib import Path
 import random
 
@@ -31,16 +30,13 @@ from tasks import (
     get_classification_dataset_config,
     model_activation_diagnostics,
     resolve_activation_config,
+    resolve_propagation_config,
     run_imaging_training,
 )
 from train_core import (
     _run_classification_epoch,
     append_metric_history,
     build_metric_history,
-    classification_composite_loss,
-    d2nn_mse_loss,
-    is_better_classification_checkpoint,
-    phase_smoothness_regularizer,
 )
 
 
@@ -53,57 +49,10 @@ EXPERIMENT_GRID_CHOICES = [
     "activation_mechanisms",
 ]
 
-
-@dataclass(frozen=True)
-class ClassificationRunConfig:
-    dataset_cfg: dict
-    optics: object
-    activation_type: str
-    activation_positions: tuple
-    activation_hparams: dict
-    loss_config: dict
-    resolved_run_name: str | None
-    checkpoint_path: Path
-    manifest_path: Path
-    propagation_backend: str
-    propagation_chunk_size: int | None
-    runtime_config: dict
-    optics_preset: str
-
-
-def seed_everything(seed):
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-
-
-def build_runtime_config(args, device):
-    return {
-        "device": str(device),
-        "allow_tf32": bool(getattr(args, "allow_tf32", False) and device.type == "cuda"),
-        "num_workers": int(getattr(args, "num_workers", 0)),
-        "pin_memory": bool(getattr(args, "pin_memory", False) and device.type == "cuda"),
-        "prefetch_factor": int(getattr(args, "prefetch_factor", 2)) if getattr(args, "num_workers", 0) > 0 else None,
-    }
-
-
-def configure_runtime(args, device):
-    if device.type != "cuda":
-        return
-
-    allow_tf32 = bool(args.allow_tf32)
-    if hasattr(torch.backends.cuda.matmul, "allow_tf32"):
-        torch.backends.cuda.matmul.allow_tf32 = allow_tf32
-    if hasattr(torch.backends.cudnn, "allow_tf32"):
-        torch.backends.cudnn.allow_tf32 = allow_tf32
-    if hasattr(torch, "set_float32_matmul_precision"):
-        torch.set_float32_matmul_precision("high" if allow_tf32 else "highest")
-    torch.backends.cudnn.benchmark = True
-
-
 def validate_training_args(args):
+    if args.epochs < 1:
+        raise ValueError("--epochs must be at least 1")
+
     if args.optics_preset == "paper":
         return
 
@@ -131,59 +80,165 @@ def validate_training_args(args):
         )
 
 
-def append_epoch_history(history, train_metrics, val_metrics):
-    for split, metrics in (("train", train_metrics), ("val", val_metrics)):
-        append_metric_history(
-            history,
-            split=split,
-            total=metrics["loss"],
-            mse=metrics["mse"],
-            ce=metrics["ce"],
-            reg=metrics["reg"],
-            accuracy=metrics["accuracy"],
-            contrast=metrics["contrast"],
+def fit_classification_model(*, model, train_loader, val_loader, device, epochs, learning_rate, loss_config, checkpoint_path):
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
+    best_checkpoint_key = (float("-inf"), float("-inf"), 0)
+    best_state_dict = None
+    last_activation_stats = {}
+    history = build_metric_history()
+
+    for epoch in range(1, epochs + 1):
+        for split, loader, split_optimizer in (("train", train_loader, optimizer), ("val", val_loader, None)):
+            metrics = _run_classification_epoch(
+                model,
+                loader,
+                device,
+                optimizer=split_optimizer,
+                **loss_config,
+            )
+            append_metric_history(
+                history,
+                split=split,
+                total=metrics["loss"],
+                mse=metrics["mse"],
+                ce=metrics["ce"],
+                reg=metrics["reg"],
+                accuracy=metrics["accuracy"],
+                contrast=metrics["contrast"],
+            )
+            if split == "train":
+                train_metrics = metrics
+            else:
+                val_metrics = metrics
+
+        print(
+            f"Epoch {epoch}/{epochs} | "
+            f"Train loss: {train_metrics['loss']:.4f} acc: {train_metrics['accuracy']:.2f}% contrast: {train_metrics['contrast']:.4f} | "
+            f"Val loss: {val_metrics['loss']:.4f} acc: {val_metrics['accuracy']:.2f}% contrast: {val_metrics['contrast']:.4f}"
         )
+        last_activation_stats = model_activation_diagnostics(model)
+        if last_activation_stats:
+            print(f"  activation stats: {format_activation_diagnostics(last_activation_stats)}")
+
+        checkpoint_key = (val_metrics["accuracy"], val_metrics["contrast"], epoch)
+        if checkpoint_key > best_checkpoint_key:
+            current_state_dict = model.state_dict()
+            torch.save(current_state_dict, checkpoint_path)
+            best_state_dict = {key: value.detach().cpu().clone() for key, value in current_state_dict.items()} if epoch != epochs else None
+            print(
+                "  -> Saved best model "
+                f"(val acc: {val_metrics['accuracy']:.2f}%, val contrast: {val_metrics['contrast']:.4f}, epoch: {epoch})"
+            )
+            best_checkpoint_key = checkpoint_key
+
+        scheduler.step()
+
+    return {
+        "accuracy": best_checkpoint_key[0],
+        "contrast": best_checkpoint_key[1],
+        "epoch": best_checkpoint_key[2],
+    }, best_state_dict, history, last_activation_stats
 
 
-def maybe_save_best_classification_checkpoint(model, checkpoint_path, val_metrics, epoch, best_checkpoint_metrics):
-    candidate_metrics = {
-        "accuracy": val_metrics["accuracy"],
-        "contrast": val_metrics["contrast"],
-        "epoch": epoch,
-    }
-    if not is_better_classification_checkpoint(candidate_metrics, best_checkpoint_metrics):
-        return best_checkpoint_metrics
-
-    torch.save(model.state_dict(), checkpoint_path)
-    print(
-        "  -> Saved best model "
-        f"(val acc: {val_metrics['accuracy']:.2f}%, val contrast: {val_metrics['contrast']:.4f}, epoch: {epoch})"
+def run_classification_training(args, device, data_dir, save_dir):
+    dataset_cfg = get_classification_dataset_config(args.dataset)
+    optics = resolve_training_optics_preset("classification", args.optics_preset).with_overrides(
+        size=args.size,
+        num_layers=args.layers,
+        wavelength=args.wavelength,
+        layer_distance=args.layer_distance,
+        pixel_size=args.pixel_size,
+        input_distance=args.input_distance,
+        output_distance=args.output_distance,
     )
-    return candidate_metrics
+    activation_type, activation_positions, activation_hparams = resolve_activation_config(args)
+    propagation_backend, propagation_chunk_size = resolve_propagation_config(args=args)
+    loss_config = {"alpha": args.alpha, "beta": args.beta, "gamma": args.gamma}
+    num_workers = args.num_workers
+    pin_memory = args.pin_memory and device.type == "cuda"
+    prefetch_factor = args.prefetch_factor if num_workers > 0 else None
+    resolved_run_name = derive_experiment_run_name(
+        run_name=args.run_name,
+        experiment_stage=args.experiment_stage,
+        activation_type=activation_type,
+        activation_positions=activation_positions,
+        activation_hparams=activation_hparams,
+        seed=args.seed,
+        loss_config=loss_config,
+        propagation_backend=propagation_backend,
+        propagation_chunk_size=propagation_chunk_size,
+        optics_preset=args.optics_preset,
+        layer_count=args.layers,
+    )
+    checkpoint_path = checkpoint_variant_path(Path(save_dir) / dataset_cfg["checkpoint_name"], resolved_run_name)
 
+    print(f"Dataset: {dataset_cfg['display_name']}")
 
-def save_classification_manifest(
-    manifest_path,
-    *,
-    checkpoint_path,
-    dataset_cfg,
-    args,
-    best_checkpoint_metrics,
-    test_metrics,
-    history,
-    optics,
-    activation_type,
-    activation_positions,
-    activation_hparams,
-    resolved_run_name,
-    loss_config,
-    last_activation_stats,
-    propagation_backend,
-    propagation_chunk_size,
-    runtime_config,
-):
+    transform = build_classification_transform(dataset_cfg)
+    train_set = dataset_cfg["dataset_cls"](data_dir, train=True, download=True, transform=transform)
+    test_set = dataset_cfg["dataset_cls"](data_dir, train=False, download=True, transform=transform)
+    train_len, val_len = classification_split_lengths(len(train_set))
+    train_set, val_set = torch.utils.data.random_split(
+        train_set,
+        [train_len, val_len],
+        generator=torch.Generator().manual_seed(args.seed),
+    )
+    loader_common = {
+        "batch_size": args.batch_size,
+        "num_workers": num_workers,
+        "pin_memory": pin_memory,
+    }
+    if num_workers > 0:
+        loader_common["persistent_workers"] = True
+        loader_common["prefetch_factor"] = prefetch_factor
+    train_loader = DataLoader(
+        train_set,
+        shuffle=True,
+        generator=torch.Generator().manual_seed(args.seed),
+        **loader_common,
+    )
+    val_loader = DataLoader(val_set, shuffle=False, **loader_common)
+    test_loader = DataLoader(test_set, shuffle=False, **loader_common)
+
+    model = build_model_for_task(
+        "classification",
+        optics,
+        activation_type=activation_type,
+        activation_positions=activation_positions,
+        activation_hparams=activation_hparams,
+        propagation_chunk_size=propagation_chunk_size,
+        propagation_backend=propagation_backend,
+    ).to(device)
+    print(
+        f"D2NN: {len(model.layers)} layers, {model.size}x{model.size} neurons/layer, "
+        f"{sum(p.numel() for p in model.parameters() if p.requires_grad)} trainable params"
+    )
+
+    if resolved_run_name:
+        print(f"Run name: {resolved_run_name}")
+
+    best_checkpoint_metrics, best_state_dict, history, last_activation_stats = fit_classification_model(
+        model=model,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        device=device,
+        epochs=args.epochs,
+        learning_rate=args.lr,
+        loss_config=loss_config,
+        checkpoint_path=checkpoint_path,
+    )
+    if best_checkpoint_metrics["epoch"] != args.epochs:
+        model.load_state_dict(best_state_dict if best_state_dict is not None else torch.load(checkpoint_path, weights_only=True))
+    test_metrics = _run_classification_epoch(
+        model,
+        test_loader,
+        device,
+        optimizer=None,
+        **loss_config,
+    )
     save_manifest(
-        manifest_path,
+        checkpoint_manifest_path(checkpoint_path),
         {
             "task": "classification",
             "dataset": dataset_cfg["display_name"],
@@ -209,259 +264,42 @@ def save_classification_manifest(
                 activation_hparams=activation_hparams,
                 model_version=MODEL_VERSION,
                 loss_config=loss_config,
-            propagation_backend=propagation_backend,
-            propagation_chunk_size=propagation_chunk_size,
-            runtime_config=runtime_config,
-            optics_preset=args.optics_preset,
-        ),
+                propagation_backend=propagation_backend,
+                propagation_chunk_size=propagation_chunk_size,
+                runtime_config={
+                    "device": str(device),
+                    "allow_tf32": args.allow_tf32 and device.type == "cuda",
+                    "num_workers": num_workers,
+                    "pin_memory": pin_memory,
+                    "prefetch_factor": prefetch_factor,
+                },
+                optics_preset=args.optics_preset,
+            ),
             "activation_diagnostics": last_activation_stats,
         },
     )
-
-
-def build_classification_loaders(args, data_dir, dataset_cfg):
-    transform = build_classification_transform(dataset_cfg)
-    dataset_cls = dataset_cfg["dataset_cls"]
-    train_set = dataset_cls(data_dir, train=True, download=True, transform=transform)
-    test_set = dataset_cls(data_dir, train=False, download=True, transform=transform)
-    train_len, val_len = classification_split_lengths(len(train_set))
-    train_set, val_set = torch.utils.data.random_split(
-        train_set,
-        [train_len, val_len],
-        generator=torch.Generator().manual_seed(args.seed),
-    )
-
-    loader_common = {
-        "batch_size": args.batch_size,
-        "num_workers": args.num_workers,
-        "pin_memory": bool(args.pin_memory and torch.cuda.is_available()),
-    }
-    if args.num_workers > 0:
-        loader_common["persistent_workers"] = True
-        loader_common["prefetch_factor"] = args.prefetch_factor
-
-    return (
-        DataLoader(
-            train_set,
-            shuffle=True,
-            generator=torch.Generator().manual_seed(args.seed),
-            **loader_common,
-        ),
-        DataLoader(val_set, shuffle=False, **loader_common),
-        DataLoader(test_set, shuffle=False, **loader_common),
-    )
-
-
-def build_classification_model(args, device):
-    base_optics = resolve_training_optics_preset("classification", args.optics_preset)
-    optics = base_optics.with_overrides(
-        size=args.size,
-        num_layers=args.layers,
-        wavelength=args.wavelength,
-        layer_distance=args.layer_distance,
-        pixel_size=args.pixel_size,
-        input_distance=args.input_distance,
-        output_distance=args.output_distance,
-    )
-    activation_type, activation_positions, activation_hparams = resolve_activation_config(args)
-    model = build_model_for_task(
-        "classification",
-        optics,
-        activation_type=activation_type,
-        activation_positions=activation_positions,
-        activation_hparams=activation_hparams,
-        propagation_chunk_size=args.propagation_chunk_size,
-        propagation_backend=args.rs_backend,
-    ).to(device)
-    return model, optics, activation_type, activation_positions, activation_hparams
-
-
-def build_classification_run_config(
-    args,
-    save_dir,
-    dataset_cfg,
-    optics,
-    activation_type,
-    activation_positions,
-    activation_hparams,
-):
-    loss_config = {"alpha": args.alpha, "beta": args.beta, "gamma": args.gamma}
-    runtime_config = build_runtime_config(args, torch.device("cuda" if torch.cuda.is_available() else "cpu"))
-    resolved_run_name = derive_experiment_run_name(
-        run_name=args.run_name,
-        experiment_stage=args.experiment_stage,
-        activation_type=activation_type,
-        activation_positions=activation_positions,
-        activation_hparams=activation_hparams,
-        seed=args.seed,
-        loss_config=loss_config,
-        propagation_backend=args.rs_backend,
-        propagation_chunk_size=args.propagation_chunk_size,
-        optics_preset=args.optics_preset,
-        layer_count=args.layers,
-    )
-    checkpoint_path = checkpoint_variant_path(save_dir / dataset_cfg["checkpoint_name"], resolved_run_name)
-    manifest_path = checkpoint_manifest_path(checkpoint_path)
-    return ClassificationRunConfig(
-        dataset_cfg=dataset_cfg,
-        optics=optics,
-        activation_type=activation_type,
-        activation_positions=activation_positions,
-        activation_hparams=activation_hparams,
-        loss_config=loss_config,
-        resolved_run_name=resolved_run_name,
-        checkpoint_path=checkpoint_path,
-        manifest_path=manifest_path,
-        propagation_backend=args.rs_backend,
-        propagation_chunk_size=args.propagation_chunk_size,
-        runtime_config=runtime_config,
-        optics_preset=args.optics_preset,
-    )
-
-
-def fit_classification_model(args, model, train_loader, val_loader, device, checkpoint_path):
-    optimizer = optim.Adam(model.parameters(), lr=args.lr)
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
-    best_checkpoint_metrics = {"accuracy": float("-inf"), "contrast": float("-inf"), "epoch": 0}
-    last_activation_stats = {}
-    history = build_metric_history()
-
-    for epoch in range(1, args.epochs + 1):
-        train_metrics = _run_classification_epoch(
-            model,
-            train_loader,
-            device,
-            optimizer=optimizer,
-            alpha=args.alpha,
-            beta=args.beta,
-            gamma=args.gamma,
-        )
-        val_metrics = _run_classification_epoch(
-            model,
-            val_loader,
-            device,
-            optimizer=None,
-            alpha=args.alpha,
-            beta=args.beta,
-            gamma=args.gamma,
-        )
-        append_epoch_history(history, train_metrics, val_metrics)
-
-        print(
-            f"Epoch {epoch}/{args.epochs} | "
-            f"Train loss: {train_metrics['loss']:.4f} acc: {train_metrics['accuracy']:.2f}% contrast: {train_metrics['contrast']:.4f} | "
-            f"Val loss: {val_metrics['loss']:.4f} acc: {val_metrics['accuracy']:.2f}% contrast: {val_metrics['contrast']:.4f}"
-        )
-        last_activation_stats = model_activation_diagnostics(model)
-        if last_activation_stats:
-            print(f"  activation stats: {format_activation_diagnostics(last_activation_stats)}")
-
-        best_checkpoint_metrics = maybe_save_best_classification_checkpoint(
-            model,
-            checkpoint_path,
-            val_metrics,
-            epoch,
-            best_checkpoint_metrics,
-        )
-
-        scheduler.step()
-
-    return best_checkpoint_metrics, history, last_activation_stats
-
-
-def finalize_classification_run(
-    args,
-    model,
-    test_loader,
-    device,
-    run_config,
-    best_checkpoint_metrics,
-    history,
-    last_activation_stats,
-):
-    model.load_state_dict(torch.load(run_config.checkpoint_path, weights_only=True))
-    test_metrics = _run_classification_epoch(
-        model,
-        test_loader,
-        device,
-        optimizer=None,
-        alpha=args.alpha,
-        beta=args.beta,
-        gamma=args.gamma,
-    )
-    save_classification_manifest(
-        run_config.manifest_path,
-        checkpoint_path=run_config.checkpoint_path,
-        dataset_cfg=run_config.dataset_cfg,
-        args=args,
-        best_checkpoint_metrics=best_checkpoint_metrics,
-        test_metrics=test_metrics,
-        history=history,
-        optics=run_config.optics,
-        activation_type=run_config.activation_type,
-        activation_positions=run_config.activation_positions,
-        activation_hparams=run_config.activation_hparams,
-        resolved_run_name=run_config.resolved_run_name,
-        loss_config=run_config.loss_config,
-        last_activation_stats=last_activation_stats,
-        propagation_backend=run_config.propagation_backend,
-        propagation_chunk_size=run_config.propagation_chunk_size,
-        runtime_config=run_config.runtime_config,
-    )
-    paper_target = run_config.dataset_cfg["paper_target"]
-    paper_target_text = f"{paper_target:.2f}%" if paper_target is not None else "n/a"
+    paper_target = dataset_cfg["paper_target"]
     print(
-        f"\nTest accuracy: {test_metrics['accuracy']:.2f}% | "
-        f"Test contrast: {test_metrics['contrast']:.4f} "
-        f"(paper target: {paper_target_text}, saved to {run_config.checkpoint_path.name})"
-    )
-
-
-def run_classification_training(args, device, data_dir, save_dir):
-    dataset_cfg = get_classification_dataset_config(args.dataset)
-    print(f"Dataset: {dataset_cfg['display_name']}")
-
-    train_loader, val_loader, test_loader = build_classification_loaders(args, data_dir, dataset_cfg)
-    model, optics, activation_type, activation_positions, activation_hparams = build_classification_model(args, device)
-    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"D2NN: {args.layers} layers, {args.size}x{args.size} neurons/layer, {total_params} trainable params")
-
-    run_config = build_classification_run_config(
-        args,
-        save_dir,
-        dataset_cfg,
-        optics,
-        activation_type,
-        activation_positions,
-        activation_hparams,
-    )
-    if run_config.resolved_run_name:
-        print(f"Run name: {run_config.resolved_run_name}")
-
-    best_checkpoint_metrics, history, last_activation_stats = fit_classification_model(
-        args,
-        model,
-        train_loader,
-        val_loader,
-        device,
-        run_config.checkpoint_path,
-    )
-
-    finalize_classification_run(
-        args,
-        model,
-        test_loader,
-        device,
-        run_config,
-        best_checkpoint_metrics,
-        history,
-        last_activation_stats,
+        f"\nTest accuracy: {test_metrics['accuracy']:.2f}% | Test contrast: {test_metrics['contrast']:.4f} "
+        f"(paper target: {f'{paper_target:.2f}%' if paper_target is not None else 'n/a'}, saved to {checkpoint_path.name})"
     )
 
 
 def run_training_task(args, device, data_dir, save_dir):
-    seed_everything(args.seed)
-    configure_runtime(args, device)
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
+    if device.type == "cuda":
+        allow_tf32 = bool(args.allow_tf32)
+        if hasattr(torch.backends.cuda.matmul, "allow_tf32"):
+            torch.backends.cuda.matmul.allow_tf32 = allow_tf32
+        if hasattr(torch.backends.cudnn, "allow_tf32"):
+            torch.backends.cudnn.allow_tf32 = allow_tf32
+        if hasattr(torch, "set_float32_matmul_precision"):
+            torch.set_float32_matmul_precision("high" if allow_tf32 else "highest")
+        torch.backends.cudnn.benchmark = True
     print(f"Seed: {args.seed}")
     if args.task == "classification":
         run_classification_training(args, device, data_dir, save_dir)

@@ -9,7 +9,6 @@ import time
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader, random_split
 from torchvision import datasets, transforms
@@ -33,15 +32,7 @@ from artifacts import (
     resolve_training_optics_preset,
     save_manifest,
 )
-from train_core import (
-    append_metric_history,
-    build_metric_history,
-    classification_composite_loss,
-    d2nn_mse_loss,
-    evaluate_classification,
-    is_better_classification_checkpoint,
-    phase_smoothness_regularizer,
-)
+from train_core import evaluate_classification
 
 
 MODEL_VERSION = "rs_v1"
@@ -212,6 +203,15 @@ def classification_split_lengths(total_train_size, val_size=5000):
     if total_train_size <= val_size:
         raise ValueError(f"Training set size {total_train_size} must exceed val_size {val_size}")
     return total_train_size - val_size, val_size
+
+
+def build_classification_test_loader(data_dir, dataset_cfg, batch_size=64, num_workers=0):
+    transform = build_classification_transform(dataset_cfg)
+    dataset_cls = dataset_cfg["dataset_cls"]
+    test_set = dataset_cls(data_dir, train=False, download=True, transform=transform)
+    loader = DataLoader(test_set, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+    class_names = [str(name) for name in getattr(test_set, "classes", [])]
+    return loader, class_names
 
 
 def resolve_experiment_seed(explicit_seed, manifest=None, default=42):
@@ -680,11 +680,12 @@ def run_classification_visualization(args):
     out_dir = args.repo_root / output_dir
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    transform = build_classification_transform(dataset_cfg)
-    dataset_cls = dataset_cfg["dataset_cls"]
-    test_set = dataset_cls(args.repo_root / "data", train=False, download=True, transform=transform)
-    test_loader = DataLoader(test_set, batch_size=64, shuffle=False, num_workers=0)
-    class_names = [str(name) for name in test_set.classes]
+    test_loader, class_names = build_classification_test_loader(
+        args.repo_root / "data",
+        dataset_cfg,
+        batch_size=64,
+        num_workers=0,
+    )
 
     plot_phase_masks(model, save_path=out_dir / "phase_masks.png", no_show=args.no_show)
     plot_output_energy(
@@ -716,7 +717,7 @@ def run_classification_visualization(args):
         quantization_levels = parse_int_sequence(args.quantization_levels)
         plot_sample_output_patterns(
             model,
-            test_set,
+            test_loader.dataset,
             device,
             sample_indices,
             save_path=out_dir / "sample_output_patterns.png",

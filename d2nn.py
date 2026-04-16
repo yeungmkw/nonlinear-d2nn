@@ -213,11 +213,7 @@ class IncoherentIntensityActivation(FieldActivationBase):
             "min_output_amplitude": float(emitted_amplitude.min().detach().cpu()),
             "emission_phase_mode": self.emission_phase_mode,
         }
-        if self.emission_phase_mode == "zero":
-            return emitted_amplitude.to(torch.cfloat)
-
-        emitted_phase = torch.zeros_like(emitted_amplitude)
-        return emitted_amplitude.to(torch.cfloat) * torch.exp(1j * emitted_phase)
+        return emitted_amplitude.to(torch.cfloat)
 
 
 def normalize_activation_positions(positions, num_layers):

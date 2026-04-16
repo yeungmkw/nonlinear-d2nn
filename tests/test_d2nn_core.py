@@ -7,6 +7,7 @@ import sys
 import json
 from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import torch
@@ -54,20 +55,26 @@ from d2nn import (
 )
 from export_phase_plate import build_parser as build_export_parser
 from export_phase_plate import main as export_phase_plate_main
-from train import build_parser, validate_training_args
-from train_core import evaluate_classification as evaluate_classification_core
-from tasks import (
+from train import (
+    build_parser,
+    validate_training_args,
+)
+from train_core import (
     append_metric_history,
-    build_classification_transform,
-    build_experiment_grid,
     build_metric_history,
-    classification_split_lengths,
     classification_composite_loss,
     d2nn_mse_loss,
+    evaluate_classification as evaluate_classification_core,
+    is_better_classification_checkpoint,
+)
+from tasks import (
+    build_classification_test_loader,
+    build_classification_transform,
+    build_experiment_grid,
+    classification_split_lengths,
     execute_experiment_grid,
     format_experiment_grid_commands,
     get_classification_dataset_config,
-    is_better_classification_checkpoint,
     plot_classification_history,
     plot_quantization_sensitivity,
     plot_sample_output_patterns,
@@ -204,11 +211,16 @@ class D2NNCoreTests(unittest.TestCase):
     def test_train_module_exposes_classification_training_core(self):
         train_module = importlib.import_module("train")
         for name in (
-            "classification_composite_loss",
             "_run_classification_epoch",
             "run_classification_training",
         ):
             self.assertTrue(hasattr(train_module, name), f"train missing {name}")
+
+    def test_validate_training_args_rejects_zero_epochs(self):
+        train_module = importlib.import_module("train")
+        args = build_parser().parse_args(["--epochs", "0"])
+        with self.assertRaisesRegex(ValueError, "epochs must be at least 1"):
+            train_module.validate_training_args(args)
 
     def test_artifacts_module_reexports_shared_helpers(self):
         artifacts = importlib.import_module("artifacts")
@@ -228,7 +240,6 @@ class D2NNCoreTests(unittest.TestCase):
             "run_classification_visualization",
             "run_imaging_training",
             "run_imaging_visualization",
-            "classification_composite_loss",
             "evaluate_classification",
         ):
             self.assertTrue(hasattr(tasks, name), f"tasks missing {name}")
@@ -283,6 +294,73 @@ class D2NNCoreTests(unittest.TestCase):
     def test_classification_split_lengths_are_dataset_aware(self):
         self.assertEqual(classification_split_lengths(60000), (55000, 5000))
         self.assertEqual(classification_split_lengths(50000), (45000, 5000))
+
+    def test_run_classification_visualization_understanding_report_uses_loader_dataset(self):
+        tasks_module = importlib.import_module("tasks")
+
+        class FakeModel:
+            def to(self, device):
+                return self
+
+            def load_state_dict(self, state_dict):
+                return None
+
+            def eval(self):
+                return self
+
+        fake_dataset = object()
+        fake_loader = SimpleNamespace(dataset=fake_dataset)
+        sample_call = {}
+        quant_call = {}
+        tmp_root = Path(tempfile.mkdtemp())
+        args = SimpleNamespace(
+            dataset="mnist",
+            checkpoint=tmp_root / "demo.pth",
+            size=None,
+            layers=None,
+            wavelength=None,
+            layer_distance=None,
+            pixel_size=None,
+            input_distance=None,
+            output_distance=None,
+            output_dir="figures/test_understanding_report",
+            repo_root=tmp_root,
+            no_show=True,
+            understanding_report=True,
+            sample_indices="1,2",
+            quantization_levels="4,8",
+        )
+
+        def record_sample(model, dataset, device, sample_indices, save_path=None, no_show=False):
+            sample_call["dataset"] = dataset
+            sample_call["sample_indices"] = tuple(sample_indices)
+            sample_call["save_path"] = save_path
+
+        def record_quant(*call_args, **call_kwargs):
+            quant_call["loader"] = call_args[3]
+            quant_call["levels"] = tuple(call_args[6])
+
+        with unittest.mock.patch.object(tasks_module, "get_classification_dataset_config", return_value={"default_output_dir": "figures/default"}), \
+             unittest.mock.patch.object(tasks_module, "read_checkpoint_manifest", return_value={}), \
+             unittest.mock.patch.object(tasks_module, "ensure_checkpoint_version"), \
+             unittest.mock.patch.object(tasks_module, "load_checkpoint_state_dict", return_value={}), \
+             unittest.mock.patch.object(tasks_module, "resolve_optics", return_value=object()), \
+             unittest.mock.patch.object(tasks_module, "resolve_activation_config", return_value=("none", (), {})), \
+             unittest.mock.patch.object(tasks_module, "resolve_propagation_config", return_value=("direct", None)), \
+             unittest.mock.patch.object(tasks_module, "build_model_for_task", return_value=FakeModel()), \
+             unittest.mock.patch.object(tasks_module, "build_classification_test_loader", return_value=(fake_loader, ["zero"])), \
+             unittest.mock.patch.object(tasks_module, "plot_phase_masks"), \
+             unittest.mock.patch.object(tasks_module, "plot_output_energy"), \
+             unittest.mock.patch.object(tasks_module, "plot_confusion_matrix"), \
+             unittest.mock.patch.object(tasks_module, "plot_classification_history"), \
+             unittest.mock.patch.object(tasks_module, "plot_sample_output_patterns", side_effect=record_sample), \
+             unittest.mock.patch.object(tasks_module, "plot_quantization_sensitivity", side_effect=record_quant):
+            tasks_module.run_classification_visualization(args)
+
+        self.assertIs(sample_call["dataset"], fake_dataset)
+        self.assertEqual(sample_call["sample_indices"], (1, 2))
+        self.assertIs(quant_call["loader"], fake_loader)
+        self.assertEqual(quant_call["levels"], (4, 8))
 
     def test_classifier_detector_count_matches_classes(self):
         model = D2NN(**CLASSIFIER_PAPER_OPTICS.with_overrides(size=32, num_layers=2).classifier_model_kwargs())
@@ -1127,7 +1205,7 @@ class D2NNCoreTests(unittest.TestCase):
         self.assertGreaterEqual(float(terms["reg"].detach()), 0.0)
 
     def test_phase_regularizer_treats_2pi_equivalent_neighbors_as_identical(self):
-        from tasks import phase_smoothness_regularizer
+        from train_core import phase_smoothness_regularizer
 
         model = D2NN(**CLASSIFIER_PAPER_OPTICS.with_overrides(size=4, num_layers=1).classifier_model_kwargs())
         with torch.no_grad():
