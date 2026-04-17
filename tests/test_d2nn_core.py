@@ -262,6 +262,121 @@ class D2NNCoreTests(unittest.TestCase):
         ):
             self.assertTrue(hasattr(train_core, name), f"train_core missing {name}")
 
+    def test_run_classification_epoch_rejects_nonfinite_training_loss(self):
+        train_core = importlib.import_module("train_core")
+
+        class TinyModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.weight = torch.nn.Parameter(torch.tensor(1.0))
+                self.layers = ()
+
+            def forward_with_metrics(self, data, target=None):
+                batch = data.shape[0]
+                scores = torch.ones(batch, 10, device=data.device) * self.weight
+                return {"scores": scores, "logits": scores, "contrast": torch.zeros(batch, device=data.device)}
+
+        model = TinyModel()
+        loader = [(torch.zeros(1, 1), torch.tensor([0]))]
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+
+        with unittest.mock.patch.object(
+            train_core,
+            "classification_composite_loss",
+            return_value={
+                "total": torch.tensor(float("nan"), requires_grad=True),
+                "mse": torch.tensor(1.0),
+                "ce": torch.tensor(1.0),
+                "reg": torch.tensor(0.0),
+            },
+        ):
+            with self.assertRaisesRegex(ValueError, "non-finite loss"):
+                train_core._run_classification_epoch(model, loader, torch.device("cpu"), optimizer=optimizer)
+
+    def test_run_classification_epoch_rejects_nonfinite_eval_scores(self):
+        train_core = importlib.import_module("train_core")
+
+        class TinyModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.layers = ()
+
+            def forward_with_metrics(self, data, target=None):
+                batch = data.shape[0]
+                scores = torch.full((batch, 10), float("inf"), device=data.device)
+                logits = torch.zeros(batch, 10, device=data.device)
+                contrast = torch.zeros(batch, device=data.device)
+                return {"scores": scores, "logits": logits, "contrast": contrast}
+
+        model = TinyModel()
+        loader = [(torch.zeros(1, 1), torch.tensor([0]))]
+
+        with self.assertRaisesRegex(ValueError, "non-finite scores"):
+            train_core._run_classification_epoch(model, loader, torch.device("cpu"), optimizer=None)
+
+    def test_run_classification_epoch_rejects_nonfinite_eval_aux_outputs(self):
+        train_core = importlib.import_module("train_core")
+        loader = [(torch.zeros(1, 1), torch.tensor([0]))]
+
+        for field, message in (
+            ("logits", "non-finite logits"),
+            ("contrast", "non-finite contrast"),
+        ):
+            with self.subTest(field=field):
+                class TinyModel(torch.nn.Module):
+                    def __init__(self):
+                        super().__init__()
+                        self.layers = ()
+
+                    def forward_with_metrics(self, data, target=None):
+                        batch = data.shape[0]
+                        result = {
+                            "scores": torch.ones(batch, 10, device=data.device),
+                            "logits": torch.zeros(batch, 10, device=data.device),
+                            "contrast": torch.zeros(batch, device=data.device),
+                        }
+                        result[field] = torch.full_like(result[field], float("inf"))
+                        return result
+
+                model = TinyModel()
+                with self.assertRaisesRegex(ValueError, message):
+                    train_core._run_classification_epoch(model, loader, torch.device("cpu"), optimizer=None)
+
+    def test_run_classification_epoch_rejects_nonfinite_aux_loss_terms(self):
+        train_core = importlib.import_module("train_core")
+        loader = [(torch.zeros(1, 1), torch.tensor([0]))]
+
+        class TinyModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.weight = torch.nn.Parameter(torch.tensor(1.0))
+                self.layers = ()
+
+            def forward_with_metrics(self, data, target=None):
+                batch = data.shape[0]
+                scores = torch.ones(batch, 10, device=data.device) * self.weight
+                return {"scores": scores, "logits": scores, "contrast": torch.zeros(batch, device=data.device)}
+
+        for field, message in (
+            ("mse", "non-finite mse"),
+            ("ce", "non-finite ce"),
+            ("reg", "non-finite reg"),
+        ):
+            with self.subTest(field=field):
+                model = TinyModel()
+                optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+                loss_terms = {
+                    "total": torch.tensor(1.0, requires_grad=True),
+                    "mse": torch.tensor(1.0),
+                    "ce": torch.tensor(1.0),
+                    "reg": torch.tensor(0.0),
+                }
+                loss_terms[field] = torch.tensor(float("nan"))
+
+                with unittest.mock.patch.object(train_core, "classification_composite_loss", return_value=loss_terms):
+                    with self.assertRaisesRegex(ValueError, message):
+                        train_core._run_classification_epoch(model, loader, torch.device("cpu"), optimizer=optimizer)
+
     def test_tasks_evaluate_classification_reexports_train_core_helper(self):
         import tasks
 

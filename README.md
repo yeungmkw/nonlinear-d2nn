@@ -11,8 +11,9 @@ This repository contains:
 - fabrication-oriented phase export tooling
 
 The active code path now uses Rayleigh-Sommerfeld propagation (`rs_v1`), composite classification loss, and contrast-aware checkpoint selection.
+The active lab-validation path is the current single-layer lab workflow; the frozen `fmnist5-phaseonly-aligned` line is kept only as a reusable historical 5-layer fabrication bundle under `docs/official-artifacts/fmnist5-phaseonly-aligned/`.
 
-If you only need the active training path, start with [train.py](train.py) and the "Current Training Snapshot" section below.
+If you only need the active training path, start with [train.py](train.py) and the "Active Training Path" section below.
 
 ## Status
 
@@ -20,19 +21,20 @@ If you only need the active training path, start with [train.py](train.py) and t
 - Detailed statistics do not live in this README. They are kept in report files and experiment artifacts.
 - Archived pre-RS outputs were removed from the working tree to avoid contaminating new runs.
 
-Current detail entrypoints:
+Active entrypoints:
 
-- [reports/post_rs_compressed/2026-04-10/summary.md](reports/post_rs_compressed/2026-04-10/summary.md)
-- [checkpoints_proxy/best_fashion_mnist.fashion_mnist_phase_only_5ep_size100_seed42_post_rs_fft_proxy.json](checkpoints_proxy/best_fashion_mnist.fashion_mnist_phase_only_5ep_size100_seed42_post_rs_fft_proxy.json)
-- [checkpoints_proxy/best_fashion_mnist.fashion_mnist_incoherent_back_5ep_size100_seed42_post_rs_fft_proxy.json](checkpoints_proxy/best_fashion_mnist.fashion_mnist_incoherent_back_5ep_size100_seed42_post_rs_fft_proxy.json)
+- [train.py](train.py)
+- [visualize.py](visualize.py)
+- [export_phase_plate.py](export_phase_plate.py)
+- [docs/INDEX.md](docs/INDEX.md)
 
 Archive root for removed pre-RS artifacts:
 
-- `～\d2nn_artifact_archive\2026-04-09-pre-rs`
+- `<artifact-archive>/2026-04-09-pre-rs`
 
-## Current Training Snapshot
+## Active Training Path
 
-[train.py](train.py) is the main training entrypoint for the active RS training path. The current proxy validation is the shortest complete proof that `train.py -> checkpoint -> manifest -> contrast -> visualize.py` works under `rs_v1`.
+[train.py](train.py) is the main training entrypoint for the active RS training path. The active lab-validation path is the shortest complete proof that `train.py -> checkpoint -> manifest -> contrast -> visualize.py` works under `rs_v1`.
 
 The main quantitative fields to read from each classification manifest are:
 
@@ -43,7 +45,7 @@ The main quantitative fields to read from each classification manifest are:
 - `test_contrast`
 - `history`
 
-Proxy configuration:
+Frozen historical 5-layer fabrication bundle:
 
 - `Fashion-MNIST`
 - `size=100`
@@ -59,21 +61,10 @@ Proxy configuration:
 
 - `incoherent_back - phase-only`: `+0.14 pt` accuracy, `+0.0039` contrast.
 - Both runs exceeded the paper target accuracy `81.13%` under the proxy configuration.
-- Full details: [reports/post_rs_compressed/2026-04-10/summary.md](reports/post_rs_compressed/2026-04-10/summary.md)
-
-Key figures:
-
-Training history
-
-| Phase-only | Incoherent-back |
-| --- | --- |
-| ![Phase-only classification history](figures/post_rs_compressed/2026-04-10/fashion_mnist_phase_only_5ep_size100_seed42_post_rs_fft_proxy/classification_history.png) | ![Incoherent-back classification history](figures/post_rs_compressed/2026-04-10/fashion_mnist_incoherent_back_5ep_size100_seed42_post_rs_fft_proxy/classification_history.png) |
-
-Output energy
-
-| Phase-only | Incoherent-back |
-| --- | --- |
-| ![Phase-only output energy](figures/post_rs_compressed/2026-04-10/fashion_mnist_phase_only_5ep_size100_seed42_post_rs_fft_proxy/output_energy.png) | ![Incoherent-back output energy](figures/post_rs_compressed/2026-04-10/fashion_mnist_incoherent_back_5ep_size100_seed42_post_rs_fft_proxy/output_energy.png) |
+- The compressed post-RS proxy reports, figures, and checkpoint manifests are historical references only.
+- Current active lab-validation work starts from the single-layer path below.
+- The frozen 5-layer bundle is still reusable, but it is not the first-stop reference for current lab work.
+- For the reusable bundle and its curated summary, start at [docs/official-artifacts/README.md](docs/official-artifacts/README.md) and [docs/official-artifacts/fmnist5-phaseonly-aligned/](docs/official-artifacts/fmnist5-phaseonly-aligned/).
 
 ## Installation
 
@@ -106,9 +97,9 @@ uv sync --dev
 
 ### Training Entry Point
 
-`train.py` is the main entrypoint for both classification and imaging experiments. `visualize.py` consumes the resulting checkpoints and manifests to generate the figures above.
+`train.py` is the main entrypoint for both classification and imaging experiments. `visualize.py` consumes the resulting checkpoints and manifests for the runs described below.
 
-Current proxy validation runs:
+Historical 5-layer proxy validation runs:
 
 ```bash
 uv run python train.py --task classification --dataset fashion-mnist --epochs 5 \
@@ -174,14 +165,15 @@ uv run python export_phase_plate.py --task classification \
 - Inter-layer spacing has not been re-measured yet, so multi-layer defaults still preserve their previous `layer_distance` until that value is confirmed.
 - Keep the checkpoint `.json` manifest next to the `.pth` when visualizing/exporting lab runs; that manifest carries the optical config needed to avoid falling back to paper optics.
 
-Run the frozen fabrication export wrapper:
+Historical frozen fabrication wrapper:
 
 ```bash
 copy fabrication/fmnist5-phaseonly-aligned.lab.template.json fabrication/fmnist5-phaseonly-aligned.lab.json
 uv run python export_fmnist5_phaseonly_aligned_final.py --lab-config fabrication/fmnist5-phaseonly-aligned.lab.json
 ```
 
-- The frozen `fmnist5-phaseonly-aligned` wrapper remains a historical 5-layer fabrication baseline, not the active lab-validation path for the current single-layer stage.
+- The frozen `fmnist5-phaseonly-aligned` wrapper remains a historical 5-layer fabrication artifact bundle, not the active single-layer lab-validation path.
+- The legacy editable baseline note and phase-mask CSV bundle were removed from the repository; use the official frozen bundle above when you need the preserved historical reference.
 
 Preview or run ablation grids:
 
@@ -194,9 +186,10 @@ uv run python train.py --run-experiment-grid activation_mechanisms \
 
 ## Where To Look
 
-If you need the current fabrication-target line first:
+If you need the active single-layer lab/fabrication references first:
 
 - [docs/INDEX.md](docs/INDEX.md)
+- [docs/official-artifacts/README.md](docs/official-artifacts/README.md)
 - [docs/official-artifacts/fmnist5-phaseonly-aligned/](docs/official-artifacts/fmnist5-phaseonly-aligned/)
 - [docs/fabrication/fashion-mnist-phase-only-lightpath-protocol.md](docs/fabrication/fashion-mnist-phase-only-lightpath-protocol.md)
 - [docs/fabrication/fashion-mnist-phase-only-lab-handoff.md](docs/fabrication/fashion-mnist-phase-only-lab-handoff.md)
@@ -205,7 +198,7 @@ If you need the current fabrication-target line first:
 If you need detailed experiment numbers:
 
 - use `reports/`
-- use `checkpoints_proxy/*.json` or `checkpoints/*.json`
+- use `checkpoints/*.json`
 - use [docs/Reproduction/](docs/Reproduction/)
 - do not mine the README for statistics
 

@@ -4,7 +4,7 @@
   "activation_type": "none",
   "batch_size": 64,
   "best_val_accuracy": null,
-  "checkpoint": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn\\.worktrees\\fmnist5-phaseonly-organize\\checkpoints\\best_fashion_mnist.fmnist5-phaseonly-aligned.pth",
+  "checkpoint": "checkpoints/best_fashion_mnist.fmnist5-phaseonly-aligned.pth",
   "dataset": "Fashion-MNIST",
   "epochs": 20,
   "experiment_stage": "fabrication_baseline",

@@ -1,5 +1,5 @@
 {
-  "checkpoint": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn\\.worktrees\\fmnist5-phaseonly-organize\\checkpoints\\best_fashion_mnist.fmnist5-phaseonly-aligned.pth",
+  "checkpoint": "checkpoints/best_fashion_mnist.fmnist5-phaseonly-aligned.pth",
   "exported_at_utc": "2026-04-07T01:39:30.535491+00:00",
   "fabrication_readiness": {
     "clipped_fraction": 0.0,
@@ -12,7 +12,7 @@
     "thickness_max_m": 0.0015377749223262072,
     "total_pixels": 200000
   },
-  "height_map_file": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn\\.worktrees\\fmnist5-phaseonly-organize\\exports\\fmnist5-phaseonly-aligned\\best_fashion_mnist.fmnist5-phaseonly-aligned\\height_map.npy",
+  "height_map_file": "exports/fmnist5-phaseonly-aligned/best_fashion_mnist.fmnist5-phaseonly-aligned/height_map.npy",
   "layer_stats": [
     {
       "height_max_m": 0.0010377749567851424,
@@ -70,7 +70,7 @@
       "thickness_min_m": 0.0005000076489523053
     }
   ],
-  "manufacturable_height_map_file": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn\\.worktrees\\fmnist5-phaseonly-organize\\exports\\fmnist5-phaseonly-aligned\\best_fashion_mnist.fmnist5-phaseonly-aligned\\height_map_manufacturable.npy",
+  "manufacturable_height_map_file": "exports/fmnist5-phaseonly-aligned/best_fashion_mnist.fmnist5-phaseonly-aligned/height_map_manufacturable.npy",
   "manufacturing": {
     "base_thickness_um": 500.0,
     "export_stl": true,
@@ -88,9 +88,9 @@
     "size": 200,
     "wavelength": 0.00075
   },
-  "phase_masks_file": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn\\.worktrees\\fmnist5-phaseonly-organize\\exports\\fmnist5-phaseonly-aligned\\best_fashion_mnist.fmnist5-phaseonly-aligned\\phase_masks.npy",
+  "phase_masks_file": "exports/fmnist5-phaseonly-aligned/best_fashion_mnist.fmnist5-phaseonly-aligned/phase_masks.npy",
   "quantization_levels": 256,
-  "quantized_height_map_file": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn\\.worktrees\\fmnist5-phaseonly-organize\\exports\\fmnist5-phaseonly-aligned\\best_fashion_mnist.fmnist5-phaseonly-aligned\\height_map_quantized.npy",
+  "quantized_height_map_file": "exports/fmnist5-phaseonly-aligned/best_fashion_mnist.fmnist5-phaseonly-aligned/height_map_quantized.npy",
   "task": "classification",
-  "thickness_map_file": "C:\\Users\\Jiangqianxian\\source\\repos\\d2nn\\.worktrees\\fmnist5-phaseonly-organize\\exports\\fmnist5-phaseonly-aligned\\best_fashion_mnist.fmnist5-phaseonly-aligned\\thickness_map.npy"
+  "thickness_map_file": "exports/fmnist5-phaseonly-aligned/best_fashion_mnist.fmnist5-phaseonly-aligned/thickness_map.npy"
 }

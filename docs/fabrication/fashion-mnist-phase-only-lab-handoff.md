@@ -2,16 +2,16 @@
 
 ## Purpose
 
-This note is the single handoff page for the first lab-facing fabrication round of the regenerated `Fashion-MNIST phase-only 5-layer physics-aligned` baseline. Use it in two phases:
+This note is the handoff page for the frozen `fmnist5-phaseonly-aligned` 5-layer fabrication line. The active training/lab-validation path is the current single-layer lab workflow; use this note only when reusing the frozen historical bundle. Use it in two phases:
 
 - before entering the lab: confirm which parameters are still missing
 - after lab parameters are known: run the final export and decide whether the design is ready for fabrication
 
 ## Frozen Target
 
-- Baseline note: `docs/baselines/fashion-mnist-phase-only-5layer-physics-aligned.md`
-- Lightpath protocol: `docs/fabrication/fashion-mnist-phase-only-lightpath-protocol.md`
+- Official artifact overview: `docs/official-artifacts/README.md`
 - Repo-tracked official artifact bundle: `docs/official-artifacts/fmnist5-phaseonly-aligned/`
+- Lightpath protocol: `docs/fabrication/fashion-mnist-phase-only-lightpath-protocol.md`
 - Checkpoint: `checkpoints/best_fashion_mnist.fmnist5-phaseonly-aligned.pth`
 - Manifest: `checkpoints/best_fashion_mnist.fmnist5-phaseonly-aligned.json`
 - Task: `classification`
@@ -110,5 +110,6 @@ Do not hand the design off as fabrication-ready if any of the following remains 
 ## Notes
 
 - The current dry-run package remains a traceability reference, not the final fabrication package.
+- The editable baseline note and phase-mask CSVs are historical support material only; start from the official artifact bundle and the lightpath protocol, not the raw baseline files.
 - This handoff note is intentionally phase-only. The nonlinear `incoherent_intensity + back` line remains a later comparison branch rather than the first lab fabrication target.
-- For lookup, use `fmnist5-phaseonly-aligned` as the short official name for this fabrication line.
+- For lookup, use `fmnist5-phaseonly-aligned` as the short official name for this frozen historical fabrication line.

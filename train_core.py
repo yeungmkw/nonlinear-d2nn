@@ -82,7 +82,22 @@ def _run_classification_epoch(model, loader, device, *, optimizer=None, alpha=1.
                 optimizer.zero_grad()
 
             result = model.forward_with_metrics(data, target=target)
+            if not torch.isfinite(result["scores"]).all():
+                raise ValueError("non-finite scores")
+            if not torch.isfinite(result["logits"]).all():
+                raise ValueError("non-finite logits")
+            if not torch.isfinite(result["contrast"]).all():
+                raise ValueError("non-finite contrast")
+
             loss_terms = classification_composite_loss(result, target, model, alpha=alpha, beta=beta, gamma=gamma)
+            if not torch.isfinite(loss_terms["total"]).all():
+                raise ValueError("non-finite loss")
+            if not torch.isfinite(loss_terms["mse"]).all():
+                raise ValueError("non-finite mse")
+            if not torch.isfinite(loss_terms["ce"]).all():
+                raise ValueError("non-finite ce")
+            if not torch.isfinite(loss_terms["reg"]).all():
+                raise ValueError("non-finite reg")
             if training:
                 loss_terms["total"].backward()
                 optimizer.step()
@@ -98,6 +113,8 @@ def _run_classification_epoch(model, loader, device, *, optimizer=None, alpha=1.
 
             if training and (batch_idx + 1) % 100 == 0:
                 print(f"  batch {batch_idx + 1}/{len(loader)}, loss: {loss_terms['total'].item():.4f}")
+
+            del result, loss_terms, pred
 
     return {
         "loss": total_loss / total,

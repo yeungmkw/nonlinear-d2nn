@@ -1,46 +1,46 @@
 # D2NN Docs Index
 
-This index is the shortest path to the files that should be checked first.
+This index separates active references from historical baselines.
+Current lab-validation starts from the single-layer workflow; the frozen `fmnist5-phaseonly-aligned` bundle stays available as a reusable historical artifact set under `docs/official-artifacts/fmnist5-phaseonly-aligned/`.
 
-## Code Entrypoints
+## Active Code Entrypoints
 
-- Training: `train.py`
-- Visualization: `visualize.py`
-- Phase/export generation: `export_phase_plate.py`
-- Official final export wrapper: `export_fmnist5_phaseonly_aligned_final.py`
+- `train.py`
+- `visualize.py`
+- `export_phase_plate.py`
 
-## Current Phase-Only Baseline
+## Active Single-Layer Lab/Fabrication References
 
-- Baseline record: `docs/baselines/fashion-mnist-phase-only-5layer-physics-aligned.md`
-- Lightpath protocol: `docs/fabrication/fashion-mnist-phase-only-lightpath-protocol.md`
-- Lab handoff: `docs/fabrication/fashion-mnist-phase-only-lab-handoff.md`
-- Lab config template: `fabrication/fmnist5-phaseonly-aligned.lab.template.json`
+- `docs/fabrication/lab-single-layer-workflow.md`
+- `docs/fabrication/fashion-mnist-phase-only-lightpath-protocol.md`
+- `docs/fabrication/fashion-mnist-phase-only-lab-handoff.md`
 
-## Official Artifacts
+## Active Official Artifacts
 
-- Official artifact guide: `docs/official-artifacts/README.md`
-- Current official fabrication line: `docs/official-artifacts/fmnist5-phaseonly-aligned/`
-- Download-folder audit: `docs/official-artifacts/download-audit-2026-04-07.md`
+- `docs/official-artifacts/README.md`
+- `docs/official-artifacts/fmnist5-phaseonly-aligned/`
+- `export_fmnist5_phaseonly_aligned_final.py`
+- `fabrication/fmnist5-phaseonly-aligned.lab.template.json`
 
-## Reproduction Logs
+## Active Reproduction Context
 
-- Reproduction index: `docs/Reproduction/README.md`
-- Main reproduction log: `docs/Reproduction/lin-2018-main-log.md`
-- Nonlinear-layer plan: `docs/Reproduction/nonlinear-layer-plan.md`
+- `docs/Reproduction/lin-2018-main-log.md`
+- `docs/Reproduction/README.md`
+- `docs/Reproduction/nonlinear-layer-plan.md`
 
-## Baseline History
+## Historical Baselines / Frozen 5-Layer Fabrication Line
 
-- Earlier phase-only baseline note: `docs/baselines/fashion-mnist-phase-only-5layer-baseline.md`
-- Earlier editable phase CSVs: `docs/baselines/fashion-mnist-phase-only-5layer-phase-masks/`
+- `docs/baselines/fashion-mnist-phase-only-5layer-physics-aligned.md`
+- The old editable baseline note and phase-mask CSV bundle were removed; keep using the official frozen bundle above for the preserved historical reference.
 
-## Runtime Outputs
+## Local Runtime Outputs
 
-These directories are still used locally, but they are not the first place to look for the current official reference.
+These are useful during runs, but they are not the first place to look for current reference material.
 
-- Local checkpoints: `checkpoints/`
-- Local exports: `exports/`
-- Local figures: `figures/`
+- `checkpoints/`
+- `exports/`
+- `figures/`
 
 ## Planning Records
 
-- Specs and plans: `docs/superpowers/`
+- `docs/superpowers/`

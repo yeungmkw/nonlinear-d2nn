@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This protocol maps the regenerated physics-aligned baseline to the first optical calibration round. Success is judged by repeatable agreement between the normalized full output-plane intensity map and the simulation reference, with detector-mask hotspots used as a secondary sanity check rather than as the only readout.
+This protocol maps the frozen `fmnist5-phaseonly-aligned` historical 5-layer fabrication line to the first optical calibration round. The current active lab-validation path is the single-layer workflow; use this protocol only for the reusable historical bundle. Success is judged by repeatable agreement between the normalized full output-plane intensity map and the simulation reference, with detector-mask hotspots used as a secondary sanity check rather than as the only readout.
 
 ## Simulation Inputs
 
@@ -16,11 +16,12 @@ This protocol maps the regenerated physics-aligned baseline to the first optical
 
 ## Current Simulation References
 
+- Active lab-validation first-stop references: `docs/official-artifacts/README.md` and `docs/official-artifacts/fmnist5-phaseonly-aligned/`
 - Regenerated baseline figures: `figures/fashion_mnist/fmnist5-phaseonly-aligned/`
 - Baseline artifacts: `phase_masks.png`, `output_energy.png`, `confusion_matrix.png`, `sample_output_patterns.png`, `quantization_sensitivity.png`
 - Nonlinear comparison figures: `figures/fashion_mnist/incoherent_back_20ep/`
 - Nonlinear reference: `checkpoints/best_fashion_mnist.incoherent_back_20ep.pth` with `incoherent_intensity` activation at position `[5]`
-- Use the regenerated baseline figures as the primary optical reference for first-round calibration. Use the nonlinear figures only as a later comparison branch.
+- Use the regenerated baseline figures as the primary optical reference for this frozen 5-layer bundle. Use the nonlinear figures only as a later comparison branch.
 
 ## Optical Mapping
 
@@ -64,7 +65,7 @@ If the fabricated output does not match the simulation trends, debug in this ord
 
 This protocol is now backed by a regenerated `fabrication_baseline` checkpoint, saved understanding-report figures, and a complete export dry-run. The next fabrication handoff should preserve this optical mapping while replacing the dry-run material/process assumptions with lab-confirmed values.
 
-For lookup, the current official short name for this fabrication line is `fmnist5-phaseonly-aligned`.
+For lookup, the current official short name for this frozen historical fabrication line is `fmnist5-phaseonly-aligned`.
 
 For the lab-facing parameter checklist, final export template, and first-session checklist, use `docs/fabrication/fashion-mnist-phase-only-lab-handoff.md`.
-For the repo-tracked directly reusable phase/export files, use `docs/official-artifacts/fmnist5-phaseonly-aligned/`.
+For the repo-tracked directly reusable phase/export files, use `docs/official-artifacts/README.md` and `docs/official-artifacts/fmnist5-phaseonly-aligned/`.
