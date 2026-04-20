@@ -1,14 +1,18 @@
 """
-Consolidated D2NN task helpers for classification and imaging workflows.
+Layered task helpers for classification and imaging workflows.
+
+This module carries task-specific builders, config resolution, and workflow
+helpers that support the unified ``train.py`` entrypoint without forcing all
+task details back into the top-level training module.
 """
 
 from __future__ import annotations
 
 import argparse
+import math
 import time
 
 import torch
-import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, random_split
 from torchvision import datasets, transforms
@@ -17,12 +21,8 @@ from artifacts import (
     CLASSIFIER_PAPER_OPTICS,
     IMAGER_PAPER_OPTICS,
     build_model_for_task,
-    checkpoint_manifest_path,
-    checkpoint_variant_path,
     configure_matplotlib_backend,
-    derive_experiment_run_name,
     ensure_checkpoint_version,
-    experiment_manifest_fields,
     load_checkpoint_state_dict,
     maybe_show,
     plot_phase_masks,
@@ -30,9 +30,13 @@ from artifacts import (
     read_checkpoint_manifest,
     resolve_optics,
     resolve_training_optics_preset,
-    save_manifest,
 )
-from train_core import evaluate_classification
+from train_core import (
+    append_metric_history,
+    build_metric_history,
+    evaluate_classification,
+    run_classification_epoch,
+)
 
 
 MODEL_VERSION = "rs_v1"
@@ -255,6 +259,79 @@ def format_activation_diagnostics(diagnostics):
         if summary:
             parts.append(f"L{position} " + ", ".join(summary))
     return " | ".join(parts)
+
+
+def print_model_summary(label, model, *, task):
+    body = f"{model.size}x{model.size} neurons/layer" if task == "classification" else f"{model.size}x{model.size}"
+    print(f"{label}: {len(model.layers)} layers, {body}, {sum(p.numel() for p in model.parameters() if p.requires_grad)} trainable params")
+
+
+def fit_classification_model(*, model, train_loader, val_loader, device, epochs, learning_rate, loss_config, checkpoint_path):
+    """Run the classification fit loop.
+
+    Returns `(best_metrics, best_state_dict, history, last_activation_stats)`.
+    `best_state_dict` is a CPU-cloned cache of the best checkpoint when the best
+    epoch is not the final epoch; otherwise it is `None` and callers should skip
+    restore if the final epoch is already best.
+    """
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
+    best_checkpoint_key = (float("-inf"), float("-inf"), 0)
+    best_state_dict = None
+    last_activation_stats = {}
+    history = build_metric_history()
+
+    for epoch in range(1, epochs + 1):
+        for split, loader, split_optimizer in (("train", train_loader, optimizer), ("val", val_loader, None)):
+            metrics = run_classification_epoch(
+                model,
+                loader,
+                device,
+                optimizer=split_optimizer,
+                **loss_config,
+            )
+            append_metric_history(
+                history,
+                split=split,
+                total=metrics["loss"],
+                mse=metrics["mse"],
+                ce=metrics["ce"],
+                reg=metrics["reg"],
+                accuracy=metrics["accuracy"],
+                contrast=metrics["contrast"],
+            )
+            if split == "train":
+                train_metrics = metrics
+            else:
+                val_metrics = metrics
+
+        print(
+            f"Epoch {epoch}/{epochs} | "
+            f"Train loss: {train_metrics['loss']:.4f} acc: {train_metrics['accuracy']:.2f}% contrast: {train_metrics['contrast']:.4f} | "
+            f"Val loss: {val_metrics['loss']:.4f} acc: {val_metrics['accuracy']:.2f}% contrast: {val_metrics['contrast']:.4f}"
+        )
+        last_activation_stats = model_activation_diagnostics(model)
+        if last_activation_stats:
+            print(f"  activation stats: {format_activation_diagnostics(last_activation_stats)}")
+
+        checkpoint_key = (val_metrics["accuracy"], val_metrics["contrast"], epoch)
+        if checkpoint_key > best_checkpoint_key:
+            current_state_dict = model.state_dict()
+            torch.save(current_state_dict, checkpoint_path)
+            best_state_dict = {key: value.detach().cpu().clone() for key, value in current_state_dict.items()} if epoch != epochs else None
+            print(
+                "  -> Saved best model "
+                f"(val acc: {val_metrics['accuracy']:.2f}%, val contrast: {val_metrics['contrast']:.4f}, epoch: {epoch})"
+            )
+            best_checkpoint_key = checkpoint_key
+
+        scheduler.step()
+
+    return {
+        "accuracy": best_checkpoint_key[0],
+        "contrast": best_checkpoint_key[1],
+        "epoch": best_checkpoint_key[2],
+    }, best_state_dict, history, last_activation_stats
 
 
 @torch.no_grad()
@@ -781,6 +858,39 @@ def build_imaging_dataset(dataset_name, data_dir, image_root, transform, seed):
     raise ValueError("Unsupported imaging dataset. Use stl10 or imagefolder.")
 
 
+def build_imaging_transform(image_size):
+    return transforms.Compose(
+        [
+            transforms.Resize((image_size, image_size)),
+            transforms.Grayscale(num_output_channels=1),
+            transforms.ToTensor(),
+        ]
+    )
+
+
+def build_imaging_loaders(args, data_dir, runtime_config):
+    transform = build_imaging_transform(args.image_size)
+    dataset_cfg = build_imaging_dataset(args.dataset, data_dir, args.image_root, transform, args.seed)
+    loader_common = {
+        "batch_size": args.batch_size,
+        "num_workers": runtime_config["num_workers"],
+        "pin_memory": runtime_config["pin_memory"],
+    }
+    if runtime_config["num_workers"] > 0:
+        loader_common["persistent_workers"] = True
+        loader_common["prefetch_factor"] = runtime_config["prefetch_factor"]
+
+    train_loader = DataLoader(
+        dataset_cfg["train_set"],
+        shuffle=True,
+        generator=torch.Generator().manual_seed(args.seed),
+        **loader_common,
+    )
+    val_loader = DataLoader(dataset_cfg["val_set"], shuffle=False, **loader_common)
+    test_loader = DataLoader(dataset_cfg["test_set"], shuffle=False, **loader_common)
+    return dataset_cfg, train_loader, val_loader, test_loader
+
+
 def train_imaging_one_epoch(model, loader, optimizer, criterion, device):
     model.train()
     total_loss = 0.0
@@ -834,35 +944,7 @@ def resolve_imaging_optics(args):
     )
 
 
-def run_imaging_training(args, device, data_dir, save_dir):
-    transform = transforms.Compose(
-        [
-            transforms.Resize((args.image_size, args.image_size)),
-            transforms.Grayscale(num_output_channels=1),
-            transforms.ToTensor(),
-        ]
-    )
-    dataset_cfg = build_imaging_dataset(args.dataset, data_dir, args.image_root, transform, args.seed)
-    print(f"Dataset: {dataset_cfg['display_name']}")
-
-    loader_common = {
-        "batch_size": args.batch_size,
-        "num_workers": getattr(args, "num_workers", 0),
-        "pin_memory": bool(getattr(args, "pin_memory", False) and torch.cuda.is_available()),
-    }
-    if loader_common["num_workers"] > 0:
-        loader_common["persistent_workers"] = True
-        loader_common["prefetch_factor"] = getattr(args, "prefetch_factor", 2)
-
-    train_loader = DataLoader(
-        dataset_cfg["train_set"],
-        shuffle=True,
-        generator=torch.Generator().manual_seed(args.seed),
-        **loader_common,
-    )
-    val_loader = DataLoader(dataset_cfg["val_set"], shuffle=False, **loader_common)
-    test_loader = DataLoader(dataset_cfg["test_set"], shuffle=False, **loader_common)
-
+def build_imaging_training_model(args, device):
     optics = resolve_imaging_optics(args)
     activation_type, activation_positions, activation_hparams = resolve_activation_config(args)
     propagation_backend, propagation_chunk_size = resolve_propagation_config(args=args)
@@ -876,39 +958,42 @@ def run_imaging_training(args, device, data_dir, save_dir):
         propagation_backend=propagation_backend,
         propagation_chunk_size=propagation_chunk_size,
     ).to(device)
-    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"D2NNImager: {args.layers} layers, {args.size}x{args.size}, {total_params} trainable params")
-
-    criterion = nn.MSELoss()
-    optimizer = optim.Adam(model.parameters(), lr=args.lr)
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
-    resolved_run_name = derive_experiment_run_name(
-        run_name=args.run_name,
-        experiment_stage=args.experiment_stage,
-        activation_type=activation_type,
-        activation_positions=activation_positions,
-        activation_hparams=activation_hparams,
-        seed=args.seed,
-        propagation_backend=propagation_backend,
-        propagation_chunk_size=propagation_chunk_size,
-        optics_preset=args.optics_preset,
-        layer_count=args.layers,
+    return (
+        model,
+        optics,
+        activation_type,
+        activation_positions,
+        activation_hparams,
+        propagation_backend,
+        propagation_chunk_size,
     )
-    checkpoint_path = checkpoint_variant_path(save_dir / dataset_cfg["checkpoint_name"], resolved_run_name)
-    manifest_path = checkpoint_manifest_path(checkpoint_path)
-    best_val_loss = float("inf")
-    last_activation_stats = {}
-    if resolved_run_name:
-        print(f"Run name: {resolved_run_name}")
 
-    for epoch in range(1, args.epochs + 1):
+
+def fit_imaging_model(*, model, train_loader, val_loader, optimizer, criterion, scheduler, device, epochs, checkpoint_path):
+    """Run the imaging fit loop.
+
+    Returns `(best_val_loss, best_epoch, best_state_dict, last_activation_stats)`.
+    `best_state_dict` is a CPU-cloned cache of the best checkpoint when the best
+    epoch is not the final epoch; otherwise it is `None` and callers should skip
+    restore if the final epoch is already best.
+    """
+    best_val_loss = float("inf")
+    best_epoch = 0
+    best_state_dict = None
+    last_activation_stats = {}
+
+    for epoch in range(1, epochs + 1):
         t0 = time.time()
         train_loss = train_imaging_one_epoch(model, train_loader, optimizer, criterion, device)
+        if not math.isfinite(train_loss):
+            raise ValueError("non-finite training loss")
         val_loss = evaluate_imaging(model, val_loader, criterion, device)
+        if not math.isfinite(val_loss):
+            raise ValueError("non-finite validation loss")
         elapsed = time.time() - t0
 
         print(
-            f"Epoch {epoch}/{args.epochs} ({elapsed:.1f}s) | "
+            f"Epoch {epoch}/{epochs} ({elapsed:.1f}s) | "
             f"Train loss: {train_loss:.4f} | Val loss: {val_loss:.4f}"
         )
         last_activation_stats = model_activation_diagnostics(model)
@@ -917,52 +1002,15 @@ def run_imaging_training(args, device, data_dir, save_dir):
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-            torch.save(model.state_dict(), checkpoint_path)
+            best_epoch = epoch
+            current_state_dict = model.state_dict()
+            torch.save(current_state_dict, checkpoint_path)
+            best_state_dict = {key: value.detach().cpu().clone() for key, value in current_state_dict.items()} if epoch != epochs else None
             print(f"  -> Saved best model (val loss: {val_loss:.4f})")
 
         scheduler.step()
 
-    model.load_state_dict(torch.load(checkpoint_path, weights_only=True))
-    test_loss = evaluate_imaging(model, test_loader, criterion, device)
-    save_manifest(
-        manifest_path,
-        {
-            "task": "imaging",
-            "dataset": dataset_cfg["display_name"],
-            "epochs": args.epochs,
-            "batch_size": args.batch_size,
-            "learning_rate": args.lr,
-            "image_size": args.image_size,
-            "input_fraction": args.input_fraction,
-            "best_val_loss": best_val_loss,
-            "test_mse": test_loss,
-            **experiment_manifest_fields(
-                checkpoint_path=checkpoint_path,
-                run_name=resolved_run_name,
-                experiment_stage=args.experiment_stage,
-                seed=args.seed,
-                optics=optics,
-                activation_type=activation_type,
-                activation_positions=activation_positions,
-                activation_hparams=activation_hparams,
-                model_version=MODEL_VERSION,
-                propagation_backend=propagation_backend,
-                propagation_chunk_size=propagation_chunk_size,
-                optics_preset=args.optics_preset,
-                runtime_config={
-                    "device": str(device),
-                    "allow_tf32": bool(getattr(args, "allow_tf32", False) and device.type == "cuda"),
-                    "num_workers": int(getattr(args, "num_workers", 0)),
-                    "pin_memory": bool(getattr(args, "pin_memory", False) and device.type == "cuda"),
-                    "prefetch_factor": int(getattr(args, "prefetch_factor", 2))
-                    if getattr(args, "num_workers", 0) > 0
-                    else None,
-                },
-            ),
-            "activation_diagnostics": last_activation_stats,
-        },
-    )
-    print(f"\nTest MSE: {test_loss:.4f} (saved to {checkpoint_path.name})")
+    return best_val_loss, best_epoch, best_state_dict, last_activation_stats
 
 
 @torch.no_grad()

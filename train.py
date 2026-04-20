@@ -1,5 +1,9 @@
 """
-D2NN unified training entrypoint.
+Unified D2NN training entrypoint and lifecycle orchestration.
+
+This module owns the public training CLI, runtime setup, task dispatch,
+and end-to-end training flow. Shared epoch math stays in ``train_core.py``,
+and task-specific builders/config helpers stay in layered internal modules.
 """
 
 import argparse
@@ -8,6 +12,7 @@ import random
 
 import numpy as np
 import torch
+import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 
@@ -23,21 +28,20 @@ from artifacts import (
 from tasks import (
     MODEL_VERSION,
     build_classification_transform,
+    build_imaging_loaders,
+    build_imaging_training_model,
     classification_split_lengths,
     execute_experiment_grid,
+    evaluate_imaging,
+    fit_classification_model,
+    fit_imaging_model,
     format_experiment_grid_commands,
-    format_activation_diagnostics,
     get_classification_dataset_config,
-    model_activation_diagnostics,
+    print_model_summary,
     resolve_activation_config,
     resolve_propagation_config,
-    run_imaging_training,
 )
-from train_core import (
-    _run_classification_epoch,
-    append_metric_history,
-    build_metric_history,
-)
+from train_core import run_classification_epoch
 
 
 EXPERIMENT_GRID_CHOICES = [
@@ -80,65 +84,79 @@ def validate_training_args(args):
         )
 
 
-def fit_classification_model(*, model, train_loader, val_loader, device, epochs, learning_rate, loss_config, checkpoint_path):
-    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
-    best_checkpoint_key = (float("-inf"), float("-inf"), 0)
-    best_state_dict = None
-    last_activation_stats = {}
-    history = build_metric_history()
-
-    for epoch in range(1, epochs + 1):
-        for split, loader, split_optimizer in (("train", train_loader, optimizer), ("val", val_loader, None)):
-            metrics = _run_classification_epoch(
-                model,
-                loader,
-                device,
-                optimizer=split_optimizer,
-                **loss_config,
-            )
-            append_metric_history(
-                history,
-                split=split,
-                total=metrics["loss"],
-                mse=metrics["mse"],
-                ce=metrics["ce"],
-                reg=metrics["reg"],
-                accuracy=metrics["accuracy"],
-                contrast=metrics["contrast"],
-            )
-            if split == "train":
-                train_metrics = metrics
-            else:
-                val_metrics = metrics
-
-        print(
-            f"Epoch {epoch}/{epochs} | "
-            f"Train loss: {train_metrics['loss']:.4f} acc: {train_metrics['accuracy']:.2f}% contrast: {train_metrics['contrast']:.4f} | "
-            f"Val loss: {val_metrics['loss']:.4f} acc: {val_metrics['accuracy']:.2f}% contrast: {val_metrics['contrast']:.4f}"
-        )
-        last_activation_stats = model_activation_diagnostics(model)
-        if last_activation_stats:
-            print(f"  activation stats: {format_activation_diagnostics(last_activation_stats)}")
-
-        checkpoint_key = (val_metrics["accuracy"], val_metrics["contrast"], epoch)
-        if checkpoint_key > best_checkpoint_key:
-            current_state_dict = model.state_dict()
-            torch.save(current_state_dict, checkpoint_path)
-            best_state_dict = {key: value.detach().cpu().clone() for key, value in current_state_dict.items()} if epoch != epochs else None
-            print(
-                "  -> Saved best model "
-                f"(val acc: {val_metrics['accuracy']:.2f}%, val contrast: {val_metrics['contrast']:.4f}, epoch: {epoch})"
-            )
-            best_checkpoint_key = checkpoint_key
-
-        scheduler.step()
-
+def resolve_loader_runtime_config(args, device):
+    num_workers = int(args.num_workers)
     return {
-        "accuracy": best_checkpoint_key[0],
-        "contrast": best_checkpoint_key[1],
-        "epoch": best_checkpoint_key[2],
-    }, best_state_dict, history, last_activation_stats
+        "device": str(device),
+        "allow_tf32": bool(args.allow_tf32 and device.type == "cuda"),
+        "num_workers": num_workers,
+        "pin_memory": bool(args.pin_memory and device.type == "cuda"),
+        "prefetch_factor": int(args.prefetch_factor) if num_workers > 0 else None,
+    }
+
+
+def resolve_run_identity(
+    *,
+    args,
+    save_dir,
+    checkpoint_name,
+    activation_type,
+    activation_positions,
+    activation_hparams,
+    propagation_backend,
+    propagation_chunk_size,
+    loss_config=None,
+):
+    resolved_run_name = derive_experiment_run_name(
+        run_name=args.run_name,
+        experiment_stage=args.experiment_stage,
+        activation_type=activation_type,
+        activation_positions=activation_positions,
+        activation_hparams=activation_hparams,
+        seed=args.seed,
+        loss_config=loss_config,
+        propagation_backend=propagation_backend,
+        propagation_chunk_size=propagation_chunk_size,
+        optics_preset=args.optics_preset,
+        layer_count=args.layers,
+    )
+    checkpoint_path = checkpoint_variant_path(Path(save_dir) / checkpoint_name, resolved_run_name)
+    return resolved_run_name, checkpoint_path
+
+
+def build_common_manifest_fields(
+    *,
+    args,
+    checkpoint_path,
+    run_name,
+    optics,
+    activation_type,
+    activation_positions,
+    activation_hparams,
+    propagation_backend,
+    propagation_chunk_size,
+    runtime_config,
+    loss_config=None,
+):
+    return experiment_manifest_fields(
+        checkpoint_path=checkpoint_path,
+        run_name=run_name,
+        experiment_stage=args.experiment_stage,
+        seed=args.seed,
+        optics=optics,
+        activation_type=activation_type,
+        activation_positions=activation_positions,
+        activation_hparams=activation_hparams,
+        model_version=MODEL_VERSION,
+        loss_config=loss_config,
+        propagation_backend=propagation_backend,
+        propagation_chunk_size=propagation_chunk_size,
+        runtime_config=runtime_config,
+        optics_preset=args.optics_preset,
+    )
+
+# Backward-compatible alias kept for existing tests and legacy introspection.
+_run_classification_epoch = run_classification_epoch
 
 
 def run_classification_training(args, device, data_dir, save_dir):
@@ -155,23 +173,7 @@ def run_classification_training(args, device, data_dir, save_dir):
     activation_type, activation_positions, activation_hparams = resolve_activation_config(args)
     propagation_backend, propagation_chunk_size = resolve_propagation_config(args=args)
     loss_config = {"alpha": args.alpha, "beta": args.beta, "gamma": args.gamma}
-    num_workers = args.num_workers
-    pin_memory = args.pin_memory and device.type == "cuda"
-    prefetch_factor = args.prefetch_factor if num_workers > 0 else None
-    resolved_run_name = derive_experiment_run_name(
-        run_name=args.run_name,
-        experiment_stage=args.experiment_stage,
-        activation_type=activation_type,
-        activation_positions=activation_positions,
-        activation_hparams=activation_hparams,
-        seed=args.seed,
-        loss_config=loss_config,
-        propagation_backend=propagation_backend,
-        propagation_chunk_size=propagation_chunk_size,
-        optics_preset=args.optics_preset,
-        layer_count=args.layers,
-    )
-    checkpoint_path = checkpoint_variant_path(Path(save_dir) / dataset_cfg["checkpoint_name"], resolved_run_name)
+    runtime_config = resolve_loader_runtime_config(args, device)
 
     print(f"Dataset: {dataset_cfg['display_name']}")
 
@@ -186,12 +188,12 @@ def run_classification_training(args, device, data_dir, save_dir):
     )
     loader_common = {
         "batch_size": args.batch_size,
-        "num_workers": num_workers,
-        "pin_memory": pin_memory,
+        "num_workers": runtime_config["num_workers"],
+        "pin_memory": runtime_config["pin_memory"],
     }
-    if num_workers > 0:
+    if runtime_config["num_workers"] > 0:
         loader_common["persistent_workers"] = True
-        loader_common["prefetch_factor"] = prefetch_factor
+        loader_common["prefetch_factor"] = runtime_config["prefetch_factor"]
     train_loader = DataLoader(
         train_set,
         shuffle=True,
@@ -210,10 +212,18 @@ def run_classification_training(args, device, data_dir, save_dir):
         propagation_chunk_size=propagation_chunk_size,
         propagation_backend=propagation_backend,
     ).to(device)
-    print(
-        f"D2NN: {len(model.layers)} layers, {model.size}x{model.size} neurons/layer, "
-        f"{sum(p.numel() for p in model.parameters() if p.requires_grad)} trainable params"
+    resolved_run_name, checkpoint_path = resolve_run_identity(
+        args=args,
+        save_dir=save_dir,
+        checkpoint_name=dataset_cfg["checkpoint_name"],
+        activation_type=activation_type,
+        activation_positions=activation_positions,
+        activation_hparams=activation_hparams,
+        propagation_backend=propagation_backend,
+        propagation_chunk_size=propagation_chunk_size,
+        loss_config=loss_config,
     )
+    print_model_summary("D2NN", model, task="classification")
 
     if resolved_run_name:
         print(f"Run name: {resolved_run_name}")
@@ -237,52 +247,115 @@ def run_classification_training(args, device, data_dir, save_dir):
         optimizer=None,
         **loss_config,
     )
-    save_manifest(
-        checkpoint_manifest_path(checkpoint_path),
-        {
-            "task": "classification",
-            "dataset": dataset_cfg["display_name"],
-            "paper_target_accuracy": dataset_cfg["paper_target"],
-            "epochs": args.epochs,
-            "batch_size": args.batch_size,
-            "learning_rate": args.lr,
-            "best_val_accuracy": best_checkpoint_metrics["accuracy"],
-            "best_val_contrast": best_checkpoint_metrics["contrast"],
-            "best_epoch": best_checkpoint_metrics["epoch"],
-            "test_accuracy": test_metrics["accuracy"],
-            "test_contrast": test_metrics["contrast"],
-            "test_loss": test_metrics["loss"],
-            "history": history,
-            **experiment_manifest_fields(
-                checkpoint_path=checkpoint_path,
-                run_name=resolved_run_name,
-                experiment_stage=args.experiment_stage,
-                seed=args.seed,
-                optics=optics,
-                activation_type=activation_type,
-                activation_positions=activation_positions,
-                activation_hparams=activation_hparams,
-                model_version=MODEL_VERSION,
-                loss_config=loss_config,
-                propagation_backend=propagation_backend,
-                propagation_chunk_size=propagation_chunk_size,
-                runtime_config={
-                    "device": str(device),
-                    "allow_tf32": args.allow_tf32 and device.type == "cuda",
-                    "num_workers": num_workers,
-                    "pin_memory": pin_memory,
-                    "prefetch_factor": prefetch_factor,
-                },
-                optics_preset=args.optics_preset,
-            ),
-            "activation_diagnostics": last_activation_stats,
-        },
-    )
+    manifest_data = {
+        "task": "classification",
+        "dataset": dataset_cfg["display_name"],
+        "paper_target_accuracy": dataset_cfg["paper_target"],
+        "epochs": args.epochs,
+        "batch_size": args.batch_size,
+        "learning_rate": args.lr,
+        "best_val_accuracy": best_checkpoint_metrics["accuracy"],
+        "best_val_contrast": best_checkpoint_metrics["contrast"],
+        "best_epoch": best_checkpoint_metrics["epoch"],
+        "test_accuracy": test_metrics["accuracy"],
+        "test_contrast": test_metrics["contrast"],
+        "test_loss": test_metrics["loss"],
+        "history": history,
+        **build_common_manifest_fields(
+            args=args,
+            checkpoint_path=checkpoint_path,
+            run_name=resolved_run_name,
+            optics=optics,
+            activation_type=activation_type,
+            activation_positions=activation_positions,
+            activation_hparams=activation_hparams,
+            propagation_backend=propagation_backend,
+            propagation_chunk_size=propagation_chunk_size,
+            runtime_config=runtime_config,
+            loss_config=loss_config,
+        ),
+        "activation_diagnostics": last_activation_stats,
+    }
+    save_manifest(checkpoint_manifest_path(checkpoint_path), manifest_data)
     paper_target = dataset_cfg["paper_target"]
     print(
         f"\nTest accuracy: {test_metrics['accuracy']:.2f}% | Test contrast: {test_metrics['contrast']:.4f} "
         f"(paper target: {f'{paper_target:.2f}%' if paper_target is not None else 'n/a'}, saved to {checkpoint_path.name})"
     )
+
+
+def run_imaging_training(args, device, data_dir, save_dir):
+    runtime_config = resolve_loader_runtime_config(args, device)
+    dataset_cfg, train_loader, val_loader, test_loader = build_imaging_loaders(args, data_dir, runtime_config)
+    print(f"Dataset: {dataset_cfg['display_name']}")
+
+    (
+        model,
+        optics,
+        activation_type,
+        activation_positions,
+        activation_hparams,
+        propagation_backend,
+        propagation_chunk_size,
+    ) = build_imaging_training_model(args, device)
+    resolved_run_name, checkpoint_path = resolve_run_identity(
+        args=args,
+        save_dir=save_dir,
+        checkpoint_name=dataset_cfg["checkpoint_name"],
+        activation_type=activation_type,
+        activation_positions=activation_positions,
+        activation_hparams=activation_hparams,
+        propagation_backend=propagation_backend,
+        propagation_chunk_size=propagation_chunk_size,
+    )
+    print_model_summary("D2NNImager", model, task="imaging")
+    if resolved_run_name:
+        print(f"Run name: {resolved_run_name}")
+
+    criterion = nn.MSELoss()
+    optimizer = optim.Adam(model.parameters(), lr=args.lr)
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
+    best_val_loss, best_epoch, best_state_dict, last_activation_stats = fit_imaging_model(
+        model=model,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        optimizer=optimizer,
+        criterion=criterion,
+        scheduler=scheduler,
+        device=device,
+        epochs=args.epochs,
+        checkpoint_path=checkpoint_path,
+    )
+    if best_epoch != args.epochs:
+        model.load_state_dict(best_state_dict if best_state_dict is not None else torch.load(checkpoint_path, weights_only=True))
+    test_loss = evaluate_imaging(model, test_loader, criterion, device)
+    manifest_data = {
+        "task": "imaging",
+        "dataset": dataset_cfg["display_name"],
+        "epochs": args.epochs,
+        "batch_size": args.batch_size,
+        "learning_rate": args.lr,
+        "image_size": args.image_size,
+        "input_fraction": args.input_fraction,
+        "best_val_loss": best_val_loss,
+        "best_epoch": best_epoch,
+        "test_mse": test_loss,
+        **build_common_manifest_fields(
+            args=args,
+            checkpoint_path=checkpoint_path,
+            run_name=resolved_run_name,
+            optics=optics,
+            activation_type=activation_type,
+            activation_positions=activation_positions,
+            activation_hparams=activation_hparams,
+            propagation_backend=propagation_backend,
+            propagation_chunk_size=propagation_chunk_size,
+            runtime_config=runtime_config,
+        ),
+        "activation_diagnostics": last_activation_stats,
+    }
+    save_manifest(checkpoint_manifest_path(checkpoint_path), manifest_data)
+    print(f"\nTest MSE: {test_loss:.4f} (saved to {checkpoint_path.name})")
 
 
 def run_training_task(args, device, data_dir, save_dir):
@@ -301,10 +374,11 @@ def run_training_task(args, device, data_dir, save_dir):
             torch.set_float32_matmul_precision("high" if allow_tf32 else "highest")
         torch.backends.cudnn.benchmark = True
     print(f"Seed: {args.seed}")
-    if args.task == "classification":
-        run_classification_training(args, device, data_dir, save_dir)
-    else:
-        run_imaging_training(args, device, data_dir, save_dir)
+    task_runners = {
+        "classification": run_classification_training,
+        "imaging": run_imaging_training,
+    }
+    task_runners[args.task](args, device, data_dir, save_dir)
 
 
 def build_parser():

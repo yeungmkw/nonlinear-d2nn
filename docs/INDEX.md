@@ -9,6 +9,12 @@ Current lab-validation starts from the single-layer workflow; the frozen `fmnist
 - `visualize.py`
 - `export_phase_plate.py`
 
+Training architecture rule:
+
+- `train.py` is the unified public training entrypoint.
+- `train_core.py` keeps shared epoch/evaluation internals.
+- `tasks.py` keeps task-specific builders and layered helpers.
+
 ## Active Single-Layer Lab/Fabrication References
 
 - `docs/fabrication/lab-single-layer-workflow.md`

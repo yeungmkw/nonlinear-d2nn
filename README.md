@@ -36,6 +36,17 @@ Archive root for removed pre-RS artifacts:
 
 [train.py](train.py) is the main training entrypoint for the active RS training path. The active lab-validation path is the shortest complete proof that `train.py -> checkpoint -> manifest -> contrast -> visualize.py` works under `rs_v1`.
 
+## Training Architecture
+
+The repository follows `one entrypoint, layered internals` for training work:
+
+- [train.py](train.py) owns the public training CLI, runtime setup, task dispatch, and end-to-end orchestration.
+- [train_core.py](train_core.py) keeps shared epoch-level math and reusable evaluation helpers.
+- [tasks.py](tasks.py) keeps task-specific builders, dataset details, imaging training helpers, and visualization support.
+- [artifacts.py](artifacts.py) keeps checkpoint naming, manifest fields, optics presets, and export/fabrication helpers.
+
+In practice, that means new training work should enter through `train.py`, but task-specific implementation details should stay layered instead of being physically merged into one file.
+
 The main quantitative fields to read from each classification manifest are:
 
 - `best_val_accuracy`
@@ -44,6 +55,12 @@ The main quantitative fields to read from each classification manifest are:
 - `test_accuracy`
 - `test_contrast`
 - `history`
+
+For imaging manifests, the main quantitative fields are:
+
+- `best_val_loss`
+- `best_epoch`
+- `test_mse`
 
 Frozen historical 5-layer fabrication bundle:
 
@@ -207,9 +224,10 @@ If you need detailed experiment numbers:
 ```text
 nonlinear-d2nn/
 |- d2nn.py
+|- train.py
+|- train_core.py
 |- tasks.py
 |- artifacts.py
-|- train.py
 |- visualize.py
 |- export_phase_plate.py
 |- tests/

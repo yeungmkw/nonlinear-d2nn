@@ -1,5 +1,8 @@
 """
-Shared classification training helpers used by train/task entrypoints.
+Shared low-level training helpers for train/task entrypoints.
+
+Keep batch/epoch numerical logic here so ``train.py`` can stay focused on
+entrypoint orchestration instead of absorbing low-level training details.
 """
 
 from __future__ import annotations
@@ -129,3 +132,6 @@ def _run_classification_epoch(model, loader, device, *, optimizer=None, alpha=1.
 @torch.no_grad()
 def evaluate_classification(model, loader, device, alpha=1.0, beta=0.1, gamma=0.01):
     return _run_classification_epoch(model, loader, device, optimizer=None, alpha=alpha, beta=beta, gamma=gamma)
+
+
+run_classification_epoch = _run_classification_epoch

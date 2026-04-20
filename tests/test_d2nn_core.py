@@ -1,6 +1,7 @@
 import math
 import tempfile
 import unittest
+import unittest.mock
 import importlib
 import subprocess
 import sys
@@ -208,11 +209,12 @@ class D2NNCoreTests(unittest.TestCase):
         self.assertEqual(args.input_distance, 0.491302)
         self.assertEqual(args.output_distance, 0.575304)
 
-    def test_train_module_exposes_classification_training_core(self):
+    def test_train_module_exposes_unified_training_entrypoints(self):
         train_module = importlib.import_module("train")
         for name in (
             "_run_classification_epoch",
             "run_classification_training",
+            "run_imaging_training",
         ):
             self.assertTrue(hasattr(train_module, name), f"train missing {name}")
 
@@ -221,6 +223,416 @@ class D2NNCoreTests(unittest.TestCase):
         args = build_parser().parse_args(["--epochs", "0"])
         with self.assertRaisesRegex(ValueError, "epochs must be at least 1"):
             train_module.validate_training_args(args)
+
+    def test_run_imaging_training_prefers_cached_best_state_dict(self):
+        train_module = importlib.import_module("train")
+
+        class FakeImager(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.weight = torch.nn.Parameter(torch.tensor(1.0))
+                self.layers = [object()]
+                self.size = 8
+                self.loaded_state = None
+
+            def load_state_dict(self, state_dict, strict=True):
+                self.loaded_state = state_dict
+                return None
+
+        args = build_parser().parse_args(["--task", "imaging", "--dataset", "stl10", "--epochs", "2"])
+        fake_model = FakeImager()
+        fake_loaders = (object(), object(), object())
+        cached_state = {"weight": torch.tensor([1.0])}
+        optics = IMAGER_PAPER_OPTICS.with_overrides(size=8, num_layers=1)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            save_dir = Path(tmp_dir)
+            with unittest.mock.patch.object(
+                train_module,
+                "build_imaging_loaders",
+                return_value=(
+                    {"display_name": "STL10", "checkpoint_name": "best_imager_stl10.pth"},
+                    *fake_loaders,
+                ),
+            ), unittest.mock.patch.object(
+                train_module,
+                "build_imaging_training_model",
+                return_value=(fake_model, optics, "none", (), {}, "direct", None),
+            ), unittest.mock.patch.object(
+                train_module,
+                "fit_imaging_model",
+                return_value=(0.1, args.epochs - 1, cached_state, {}),
+            ), unittest.mock.patch.object(
+                train_module,
+                "evaluate_imaging",
+                return_value=0.2,
+            ), unittest.mock.patch.object(
+                train_module,
+                "save_manifest",
+            ), unittest.mock.patch.object(
+                train_module.torch,
+                "load",
+                side_effect=AssertionError("run_imaging_training should use cached best state before disk reload"),
+            ):
+                train_module.run_imaging_training(args, torch.device("cpu"), Path("data"), save_dir)
+
+        self.assertIs(fake_model.loaded_state, cached_state)
+
+    def test_run_imaging_training_falls_back_to_checkpoint_reload_without_cached_state(self):
+        train_module = importlib.import_module("train")
+
+        class FakeImager(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.weight = torch.nn.Parameter(torch.tensor(1.0))
+                self.layers = [object()]
+                self.size = 8
+                self.loaded_state = None
+
+            def load_state_dict(self, state_dict, strict=True):
+                self.loaded_state = state_dict
+                return None
+
+        args = build_parser().parse_args(["--task", "imaging", "--dataset", "stl10", "--epochs", "2"])
+        fake_model = FakeImager()
+        fake_loaders = (object(), object(), object())
+        reloaded_state = {"weight": torch.tensor([2.0])}
+        optics = IMAGER_PAPER_OPTICS.with_overrides(size=8, num_layers=1)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            save_dir = Path(tmp_dir)
+            with unittest.mock.patch.object(
+                train_module,
+                "build_imaging_loaders",
+                return_value=(
+                    {"display_name": "STL10", "checkpoint_name": "best_imager_stl10.pth"},
+                    *fake_loaders,
+                ),
+            ), unittest.mock.patch.object(
+                train_module,
+                "build_imaging_training_model",
+                return_value=(fake_model, optics, "none", (), {}, "direct", None),
+            ), unittest.mock.patch.object(
+                train_module,
+                "fit_imaging_model",
+                return_value=(0.1, args.epochs - 1, None, {}),
+            ), unittest.mock.patch.object(
+                train_module,
+                "evaluate_imaging",
+                return_value=0.2,
+            ), unittest.mock.patch.object(
+                train_module,
+                "save_manifest",
+            ), unittest.mock.patch.object(
+                train_module.torch,
+                "load",
+                return_value=reloaded_state,
+            ) as load_mock:
+                train_module.run_imaging_training(args, torch.device("cpu"), Path("data"), save_dir)
+
+        load_mock.assert_called_once()
+        self.assertIs(fake_model.loaded_state, reloaded_state)
+
+    def test_run_imaging_training_skips_reload_when_final_epoch_is_best(self):
+        train_module = importlib.import_module("train")
+
+        class FakeImager(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.weight = torch.nn.Parameter(torch.tensor(1.0))
+                self.layers = [object()]
+                self.size = 8
+                self.loaded_state = None
+
+            def load_state_dict(self, state_dict, strict=True):
+                self.loaded_state = state_dict
+                return None
+
+        args = build_parser().parse_args(["--task", "imaging", "--dataset", "stl10", "--epochs", "2"])
+        fake_model = FakeImager()
+        fake_loaders = (object(), object(), object())
+        optics = IMAGER_PAPER_OPTICS.with_overrides(size=8, num_layers=1)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            save_dir = Path(tmp_dir)
+            with unittest.mock.patch.object(
+                train_module,
+                "build_imaging_loaders",
+                return_value=(
+                    {"display_name": "STL10", "checkpoint_name": "best_imager_stl10.pth"},
+                    *fake_loaders,
+                ),
+            ), unittest.mock.patch.object(
+                train_module,
+                "build_imaging_training_model",
+                return_value=(fake_model, optics, "none", (), {}, "direct", None),
+            ), unittest.mock.patch.object(
+                train_module,
+                "fit_imaging_model",
+                return_value=(0.1, args.epochs, None, {}),
+            ), unittest.mock.patch.object(
+                train_module,
+                "evaluate_imaging",
+                return_value=0.2,
+            ), unittest.mock.patch.object(
+                train_module,
+                "save_manifest",
+            ), unittest.mock.patch.object(
+                train_module.torch,
+                "load",
+                side_effect=AssertionError("run_imaging_training should not reload when the final epoch is already best"),
+            ):
+                train_module.run_imaging_training(args, torch.device("cpu"), Path("data"), save_dir)
+
+        self.assertIsNone(fake_model.loaded_state)
+
+    def test_run_imaging_training_manifest_records_best_epoch(self):
+        train_module = importlib.import_module("train")
+
+        class FakeImager(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.weight = torch.nn.Parameter(torch.tensor(1.0))
+                self.layers = [object()]
+                self.size = 8
+
+            def load_state_dict(self, state_dict, strict=True):
+                return None
+
+        args = build_parser().parse_args(["--task", "imaging", "--dataset", "stl10", "--epochs", "3"])
+        fake_model = FakeImager()
+        fake_loaders = (object(), object(), object())
+        optics = IMAGER_PAPER_OPTICS.with_overrides(size=8, num_layers=1)
+        manifest_payload = {}
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            save_dir = Path(tmp_dir)
+
+            def record_manifest(path, payload):
+                manifest_payload.update(payload)
+
+            with unittest.mock.patch.object(
+                train_module,
+                "build_imaging_loaders",
+                return_value=(
+                    {"display_name": "STL10", "checkpoint_name": "best_imager_stl10.pth"},
+                    *fake_loaders,
+                ),
+            ), unittest.mock.patch.object(
+                train_module,
+                "build_imaging_training_model",
+                return_value=(fake_model, optics, "none", (), {}, "direct", None),
+            ), unittest.mock.patch.object(
+                train_module,
+                "fit_imaging_model",
+                return_value=(0.1, 2, {"weight": torch.tensor([1.0])}, {}),
+            ), unittest.mock.patch.object(
+                train_module,
+                "evaluate_imaging",
+                return_value=0.2,
+            ), unittest.mock.patch.object(
+                train_module,
+                "save_manifest",
+                side_effect=record_manifest,
+            ):
+                train_module.run_imaging_training(args, torch.device("cpu"), Path("data"), save_dir)
+
+        self.assertEqual(manifest_payload["best_epoch"], 2)
+
+    def test_run_classification_training_prefers_cached_best_state_dict(self):
+        train_module = importlib.import_module("train")
+
+        class FakeDataset:
+            def __init__(self, root, train, download, transform):
+                self.train = train
+
+            def __len__(self):
+                return 6001 if self.train else 10
+
+            def __getitem__(self, index):
+                return torch.zeros(1, 28, 28), 0
+
+        class FakeClassifier(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.weight = torch.nn.Parameter(torch.tensor(1.0))
+                self.layers = [object()]
+                self.size = 8
+                self.loaded_state = None
+
+            def load_state_dict(self, state_dict, strict=True):
+                self.loaded_state = state_dict
+                return None
+
+        args = build_parser().parse_args(["--task", "classification", "--dataset", "mnist", "--epochs", "2"])
+        fake_model = FakeClassifier()
+        dataset_cfg = {
+            "dataset_cls": FakeDataset,
+            "display_name": "MNIST",
+            "checkpoint_name": "best_mnist.pth",
+            "paper_target": 91.75,
+            "grayscale": False,
+        }
+        cached_state = {"weight": torch.tensor([1.0])}
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            save_dir = Path(tmp_dir)
+            with unittest.mock.patch.object(train_module, "get_classification_dataset_config", return_value=dataset_cfg), \
+                 unittest.mock.patch.object(train_module, "build_model_for_task", return_value=fake_model), \
+                 unittest.mock.patch.object(
+                     train_module,
+                     "fit_classification_model",
+                     return_value=({"accuracy": 90.0, "contrast": 0.5, "epoch": args.epochs - 1}, cached_state, {}, {}),
+                 ), \
+                 unittest.mock.patch.object(
+                     train_module,
+                     "_run_classification_epoch",
+                     return_value={"accuracy": 91.0, "contrast": 0.6, "loss": 0.1},
+                 ), \
+                 unittest.mock.patch.object(train_module, "save_manifest"), \
+                 unittest.mock.patch.object(
+                     train_module.torch,
+                     "load",
+                     side_effect=AssertionError("run_classification_training should use cached best state before disk reload"),
+                 ):
+                train_module.run_classification_training(args, torch.device("cpu"), Path("data"), save_dir)
+
+        self.assertIs(fake_model.loaded_state, cached_state)
+
+    def test_run_classification_training_falls_back_to_checkpoint_reload_without_cached_state(self):
+        train_module = importlib.import_module("train")
+
+        class FakeDataset:
+            def __init__(self, root, train, download, transform):
+                self.train = train
+
+            def __len__(self):
+                return 6001 if self.train else 10
+
+            def __getitem__(self, index):
+                return torch.zeros(1, 28, 28), 0
+
+        class FakeClassifier(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.weight = torch.nn.Parameter(torch.tensor(1.0))
+                self.layers = [object()]
+                self.size = 8
+                self.loaded_state = None
+
+            def load_state_dict(self, state_dict, strict=True):
+                self.loaded_state = state_dict
+                return None
+
+        args = build_parser().parse_args(["--task", "classification", "--dataset", "mnist", "--epochs", "2"])
+        fake_model = FakeClassifier()
+        dataset_cfg = {
+            "dataset_cls": FakeDataset,
+            "display_name": "MNIST",
+            "checkpoint_name": "best_mnist.pth",
+            "paper_target": 91.75,
+            "grayscale": False,
+        }
+        reloaded_state = {"weight": torch.tensor([2.0])}
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            save_dir = Path(tmp_dir)
+            with unittest.mock.patch.object(train_module, "get_classification_dataset_config", return_value=dataset_cfg), \
+                 unittest.mock.patch.object(train_module, "build_model_for_task", return_value=fake_model), \
+                 unittest.mock.patch.object(
+                     train_module,
+                     "fit_classification_model",
+                     return_value=({"accuracy": 90.0, "contrast": 0.5, "epoch": args.epochs - 1}, None, {}, {}),
+                 ), \
+                 unittest.mock.patch.object(
+                     train_module,
+                     "_run_classification_epoch",
+                     return_value={"accuracy": 91.0, "contrast": 0.6, "loss": 0.1},
+                 ), \
+                 unittest.mock.patch.object(train_module, "save_manifest"), \
+                 unittest.mock.patch.object(train_module.torch, "load", return_value=reloaded_state) as load_mock:
+                train_module.run_classification_training(args, torch.device("cpu"), Path("data"), save_dir)
+
+        load_mock.assert_called_once()
+        self.assertIs(fake_model.loaded_state, reloaded_state)
+
+    def test_run_classification_training_skips_reload_when_final_epoch_is_best(self):
+        train_module = importlib.import_module("train")
+
+        class FakeDataset:
+            def __init__(self, root, train, download, transform):
+                self.train = train
+
+            def __len__(self):
+                return 6001 if self.train else 10
+
+            def __getitem__(self, index):
+                return torch.zeros(1, 28, 28), 0
+
+        class FakeClassifier(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.weight = torch.nn.Parameter(torch.tensor(1.0))
+                self.layers = [object()]
+                self.size = 8
+                self.loaded_state = None
+
+            def load_state_dict(self, state_dict, strict=True):
+                self.loaded_state = state_dict
+                return None
+
+        args = build_parser().parse_args(["--task", "classification", "--dataset", "mnist", "--epochs", "2"])
+        fake_model = FakeClassifier()
+        dataset_cfg = {
+            "dataset_cls": FakeDataset,
+            "display_name": "MNIST",
+            "checkpoint_name": "best_mnist.pth",
+            "paper_target": 91.75,
+            "grayscale": False,
+        }
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            save_dir = Path(tmp_dir)
+            with unittest.mock.patch.object(train_module, "get_classification_dataset_config", return_value=dataset_cfg), \
+                 unittest.mock.patch.object(train_module, "build_model_for_task", return_value=fake_model), \
+                 unittest.mock.patch.object(
+                     train_module,
+                     "fit_classification_model",
+                     return_value=({"accuracy": 90.0, "contrast": 0.5, "epoch": args.epochs}, None, {}, {}),
+                 ), \
+                 unittest.mock.patch.object(
+                     train_module,
+                     "_run_classification_epoch",
+                     return_value={"accuracy": 91.0, "contrast": 0.6, "loss": 0.1},
+                 ), \
+                 unittest.mock.patch.object(train_module, "save_manifest"), \
+                 unittest.mock.patch.object(
+                     train_module.torch,
+                     "load",
+                     side_effect=AssertionError("run_classification_training should not reload when the final epoch is already best"),
+                 ):
+                train_module.run_classification_training(args, torch.device("cpu"), Path("data"), save_dir)
+
+        self.assertIsNone(fake_model.loaded_state)
+
+    def test_print_model_summary_uses_task_specific_wording(self):
+        train_module = importlib.import_module("train")
+
+        class FakeModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.weight = torch.nn.Parameter(torch.tensor(1.0))
+                self.layers = [object(), object()]
+                self.size = 8
+
+        model = FakeModel()
+        with unittest.mock.patch("builtins.print") as print_mock:
+            train_module.print_model_summary("D2NN", model, task="classification")
+            train_module.print_model_summary("D2NNImager", model, task="imaging")
+
+        outputs = [call.args[0] for call in print_mock.call_args_list]
+        self.assertIn("neurons/layer", outputs[0])
+        self.assertNotIn("neurons/layer", outputs[1])
 
     def test_artifacts_module_reexports_shared_helpers(self):
         artifacts = importlib.import_module("artifacts")
@@ -234,11 +646,15 @@ class D2NNCoreTests(unittest.TestCase):
         ):
             self.assertTrue(hasattr(artifacts, name), f"artifacts missing {name}")
 
-    def test_tasks_module_exposes_both_task_families(self):
+    def test_tasks_module_exposes_layered_task_helpers(self):
         tasks = importlib.import_module("tasks")
         for name in (
+            "fit_classification_model",
+            "print_model_summary",
             "run_classification_visualization",
-            "run_imaging_training",
+            "build_imaging_loaders",
+            "build_imaging_training_model",
+            "fit_imaging_model",
             "run_imaging_visualization",
             "evaluate_classification",
         ):
@@ -248,6 +664,108 @@ class D2NNCoreTests(unittest.TestCase):
         tasks_path = Path(__file__).resolve().parents[1] / "tasks.py"
         content = tasks_path.read_text(encoding="utf-8")
         self.assertNotIn("from train import", content)
+
+    def test_tasks_module_does_not_expose_training_entrypoints(self):
+        tasks = importlib.import_module("tasks")
+        self.assertFalse(hasattr(tasks, "run_imaging_training"))
+
+    def test_fit_imaging_model_returns_cpu_cloned_best_state(self):
+        tasks_module = importlib.import_module("tasks")
+
+        class TinyImager(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.weight = torch.nn.Parameter(torch.tensor([1.0]))
+
+        model = TinyImager()
+        scheduler = unittest.mock.Mock()
+
+        def advance_one_epoch(*args, **kwargs):
+            with torch.no_grad():
+                model.weight.add_(1.0)
+            return 0.0
+
+        with tempfile.TemporaryDirectory() as tmp_dir, \
+             unittest.mock.patch.object(tasks_module, "train_imaging_one_epoch", side_effect=advance_one_epoch), \
+             unittest.mock.patch.object(tasks_module, "evaluate_imaging", side_effect=[0.4, 0.5]), \
+             unittest.mock.patch.object(tasks_module, "model_activation_diagnostics", return_value={}):
+            best_val_loss, best_epoch, best_state_dict, last_activation_stats = tasks_module.fit_imaging_model(
+                model=model,
+                train_loader=object(),
+                val_loader=object(),
+                optimizer=object(),
+                criterion=object(),
+                scheduler=scheduler,
+                device=torch.device("cpu"),
+                epochs=2,
+                checkpoint_path=Path(tmp_dir) / "best_imager.pth",
+            )
+
+        self.assertEqual(best_val_loss, 0.4)
+        self.assertEqual(best_epoch, 1)
+        self.assertEqual(last_activation_stats, {})
+        self.assertIsNotNone(best_state_dict)
+        self.assertEqual(best_state_dict["weight"].device.type, "cpu")
+        self.assertTrue(torch.equal(best_state_dict["weight"], torch.tensor([2.0])))
+        self.assertTrue(torch.equal(model.weight.detach(), torch.tensor([3.0])))
+        self.assertNotEqual(best_state_dict["weight"].data_ptr(), model.weight.detach().data_ptr())
+        self.assertEqual(scheduler.step.call_count, 2)
+
+    def test_fit_imaging_model_rejects_nonfinite_validation_loss(self):
+        tasks_module = importlib.import_module("tasks")
+
+        class TinyImager(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.weight = torch.nn.Parameter(torch.tensor([1.0]))
+
+        model = TinyImager()
+        scheduler = unittest.mock.Mock()
+
+        with tempfile.TemporaryDirectory() as tmp_dir, \
+             unittest.mock.patch.object(tasks_module, "train_imaging_one_epoch", return_value=0.1), \
+             unittest.mock.patch.object(tasks_module, "evaluate_imaging", return_value=float("nan")), \
+             unittest.mock.patch.object(tasks_module, "model_activation_diagnostics", return_value={}):
+            with self.assertRaisesRegex(ValueError, "non-finite validation loss"):
+                tasks_module.fit_imaging_model(
+                    model=model,
+                    train_loader=object(),
+                    val_loader=object(),
+                    optimizer=object(),
+                    criterion=object(),
+                    scheduler=scheduler,
+                    device=torch.device("cpu"),
+                    epochs=1,
+                    checkpoint_path=Path(tmp_dir) / "best_imager.pth",
+                )
+
+    def test_fit_imaging_model_rejects_nonfinite_training_loss(self):
+        tasks_module = importlib.import_module("tasks")
+
+        class TinyImager(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.weight = torch.nn.Parameter(torch.tensor([1.0]))
+
+        model = TinyImager()
+        scheduler = unittest.mock.Mock()
+
+        with tempfile.TemporaryDirectory() as tmp_dir, \
+             unittest.mock.patch.object(tasks_module, "train_imaging_one_epoch", return_value=float("nan")), \
+             unittest.mock.patch.object(tasks_module, "evaluate_imaging", return_value=0.1), \
+             unittest.mock.patch.object(tasks_module, "model_activation_diagnostics", return_value={}):
+            with self.assertRaisesRegex(ValueError, "non-finite training loss"):
+                tasks_module.fit_imaging_model(
+                    model=model,
+                    train_loader=object(),
+                    val_loader=object(),
+                    optimizer=object(),
+                    criterion=object(),
+                    scheduler=scheduler,
+                    device=torch.device("cpu"),
+                    epochs=1,
+                    checkpoint_path=Path(tmp_dir) / "best_imager.pth",
+                )
 
     def test_train_core_exposes_shared_classification_helpers(self):
         train_core = importlib.import_module("train_core")
@@ -259,6 +777,7 @@ class D2NNCoreTests(unittest.TestCase):
             "append_metric_history",
             "is_better_classification_checkpoint",
             "evaluate_classification",
+            "run_classification_epoch",
         ):
             self.assertTrue(hasattr(train_core, name), f"train_core missing {name}")
 
