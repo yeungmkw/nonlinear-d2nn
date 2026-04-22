@@ -97,6 +97,11 @@ INCOHERENT_INTENSITY_PRESETS = {
     "balanced": {"responsivity": 1.0, "threshold": 0.1, "emission_phase_mode": "zero"},
     "aggressive": {"responsivity": 1.5, "threshold": 0.05, "emission_phase_mode": "zero"},
 }
+ACTIVATION_PRESETS = {
+    "coherent_amplitude": COHERENT_AMPLITUDE_PRESETS,
+    "coherent_phase": COHERENT_PHASE_PRESETS,
+    "incoherent_intensity": INCOHERENT_INTENSITY_PRESETS,
+}
 
 
 def parse_activation_positions(value):
@@ -107,25 +112,33 @@ def parse_int_sequence(value):
     if value in (None, "", ()):
         return ()
 
-    if isinstance(value, str):
-        parts = [part.strip() for part in value.split(",") if part.strip()]
-        return tuple(int(part) for part in parts)
+    raw_values = value.split(",") if isinstance(value, str) else value
+    return tuple(int(str(part).strip()) for part in raw_values if str(part).strip())
 
-    return tuple(int(part) for part in value)
+
+def _mid_activation_position(num_layers):
+    return ((int(num_layers) + 1) // 2,)
+
+
+def _all_activation_positions(num_layers):
+    return tuple(range(1, int(num_layers) + 1))
+
+
+ACTIVATION_PLACEMENT_ALIASES = {
+    "front": lambda num_layers: (1,),
+    "mid": _mid_activation_position,
+    "back": lambda num_layers: (int(num_layers),),
+    "all": _all_activation_positions,
+}
 
 
 def resolve_activation_positions_from_alias(alias, num_layers):
     if not alias or num_layers is None:
         return ()
-    if alias == "front":
-        return (1,)
-    if alias == "mid":
-        return ((int(num_layers) + 1) // 2,)
-    if alias == "back":
-        return (int(num_layers),)
-    if alias == "all":
-        return tuple(range(1, int(num_layers) + 1))
-    raise ValueError(f"Unsupported activation placement alias: {alias}")
+    resolver = ACTIVATION_PLACEMENT_ALIASES.get(alias)
+    if resolver is None:
+        raise ValueError(f"Unsupported activation placement alias: {alias}")
+    return resolver(num_layers)
 
 
 def activation_hparams_from_args(args):
@@ -151,39 +164,43 @@ def activation_preset_hparams(args=None):
     activation_preset = getattr(args, "activation_preset", None)
     if not activation_preset:
         return {}
-    if activation_type == "coherent_amplitude":
-        return dict(COHERENT_AMPLITUDE_PRESETS[activation_preset])
-    if activation_type == "coherent_phase":
-        return dict(COHERENT_PHASE_PRESETS[activation_preset])
-    if activation_type == "incoherent_intensity":
-        return dict(INCOHERENT_INTENSITY_PRESETS[activation_preset])
-    return {}
+    preset_family = ACTIVATION_PRESETS.get(activation_type)
+    return dict(preset_family[activation_preset]) if preset_family is not None else {}
+
+
+def _activation_num_layers(args=None, manifest=None):
+    num_layers = getattr(args, "layers", None) if args is not None else None
+    if num_layers is not None:
+        return num_layers
+    return ((manifest or {}).get("optical_config") or {}).get("num_layers")
+
+
+def _resolve_activation_positions(args=None, manifest=None):
+    explicit_positions = getattr(args, "activation_positions", None) if args is not None else None
+    if explicit_positions is not None:
+        return parse_activation_positions(explicit_positions)
+
+    explicit_placement = getattr(args, "activation_placement", None) if args is not None else None
+    if explicit_placement is not None:
+        return resolve_activation_positions_from_alias(explicit_placement, _activation_num_layers(args, manifest))
+
+    return parse_activation_positions((manifest or {}).get("activation_positions"))
+
+
+def _merge_activation_hparams(args=None, manifest=None):
+    activation_hparams = dict((manifest or {}).get("activation_hparams") or {})
+    activation_hparams.update(activation_preset_hparams(args))
+    if args is not None:
+        activation_hparams.update(activation_hparams_from_args(args))
+    return activation_hparams
 
 
 def resolve_activation_config(args=None, manifest=None):
     explicit_type = getattr(args, "activation_type", None) if args is not None else None
-    explicit_positions = getattr(args, "activation_positions", None) if args is not None else None
-    explicit_placement = getattr(args, "activation_placement", None) if args is not None else None
-    explicit_hparams = activation_hparams_from_args(args) if args is not None else {}
-    preset_hparams = activation_preset_hparams(args)
-
     manifest = manifest or {}
     activation_type = explicit_type or manifest.get("activation_type") or "none"
-    num_layers = getattr(args, "layers", None) if args is not None else None
-    if num_layers is None:
-        num_layers = ((manifest.get("optical_config") or {}).get("num_layers"))
-    activation_positions = (
-        parse_activation_positions(explicit_positions)
-        if explicit_positions is not None
-        else (
-            resolve_activation_positions_from_alias(explicit_placement, num_layers)
-            if explicit_placement is not None
-            else parse_activation_positions(manifest.get("activation_positions"))
-        )
-    )
-    activation_hparams = dict(manifest.get("activation_hparams") or {})
-    activation_hparams.update(preset_hparams)
-    activation_hparams.update(explicit_hparams)
+    activation_positions = _resolve_activation_positions(args, manifest)
+    activation_hparams = _merge_activation_hparams(args, manifest)
     return activation_type, activation_positions, activation_hparams
 
 
@@ -226,14 +243,22 @@ def resolve_experiment_seed(explicit_seed, manifest=None, default=42):
     return default
 
 
+def _explicit_or_manifest(explicit_value, manifest, key, default=None):
+    if explicit_value is not None:
+        return explicit_value
+    return manifest.get(key, default)
+
+
+def _backend_explicit_or_manifest(explicit_backend, manifest):
+    return explicit_backend or manifest.get("propagation_backend") or "direct"
+
+
 def resolve_propagation_config(args=None, manifest=None):
     manifest = manifest or {}
     explicit_backend = getattr(args, "rs_backend", None) if args is not None else None
     explicit_chunk_size = getattr(args, "propagation_chunk_size", None) if args is not None else None
-    propagation_backend = explicit_backend or manifest.get("propagation_backend") or "direct"
-    propagation_chunk_size = (
-        explicit_chunk_size if explicit_chunk_size is not None else manifest.get("propagation_chunk_size")
-    )
+    propagation_backend = _backend_explicit_or_manifest(explicit_backend, manifest)
+    propagation_chunk_size = _explicit_or_manifest(explicit_chunk_size, manifest, "propagation_chunk_size")
     return propagation_backend, propagation_chunk_size
 
 
@@ -244,20 +269,29 @@ def model_activation_diagnostics(model):
     return diagnostics_fn()
 
 
+ACTIVATION_DIAGNOSTIC_FIELDS = (
+    ("mean_gain", "gain"),
+    ("mean_phase_shift", "dphi"),
+    ("mean_output_amplitude", "A"),
+    ("mean_intensity", "I"),
+)
+
+
+def _format_activation_layer_diagnostics(position, stats):
+    summary = [
+        f"{label}={stats[field_name]:.3f}"
+        for field_name, label in ACTIVATION_DIAGNOSTIC_FIELDS
+        if field_name in stats
+    ]
+    return f"L{position} " + ", ".join(summary) if summary else None
+
+
 def format_activation_diagnostics(diagnostics):
     parts = []
     for position, stats in diagnostics.items():
-        summary = []
-        if "mean_gain" in stats:
-            summary.append(f"gain={stats['mean_gain']:.3f}")
-        if "mean_phase_shift" in stats:
-            summary.append(f"dphi={stats['mean_phase_shift']:.3f}")
-        if "mean_output_amplitude" in stats:
-            summary.append(f"A={stats['mean_output_amplitude']:.3f}")
-        if "mean_intensity" in stats:
-            summary.append(f"I={stats['mean_intensity']:.3f}")
-        if summary:
-            parts.append(f"L{position} " + ", ".join(summary))
+        formatted = _format_activation_layer_diagnostics(position, stats)
+        if formatted:
+            parts.append(formatted)
     return " | ".join(parts)
 
 
@@ -334,6 +368,34 @@ def fit_classification_model(*, model, train_loader, val_loader, device, epochs,
     }, best_state_dict, history, last_activation_stats
 
 
+def _collect_indexed_samples(dataset, sample_indices):
+    samples = []
+    targets = []
+    for index in sample_indices:
+        sample, target = dataset[index]
+        samples.append(sample)
+        targets.append(target)
+    return samples, targets
+
+
+def _plot_input_sample(ax, sample):
+    sample_cpu = sample.detach().cpu()
+    if sample_cpu.ndim == 3 and sample_cpu.shape[0] == 1:
+        ax.imshow(sample_cpu[0].numpy(), cmap="gray")
+        return
+    if sample_cpu.ndim == 3 and sample_cpu.shape[0] in (3, 4):
+        ax.imshow(sample_cpu[:3].permute(1, 2, 0).clamp(0, 1).numpy())
+        return
+    ax.imshow(sample_cpu.squeeze().numpy(), cmap="gray")
+
+
+def _target_label(target, class_names):
+    target_index = int(target) if not torch.is_tensor(target) else int(target.item())
+    if class_names and target_index < len(class_names):
+        return class_names[target_index]
+    return str(target_index)
+
+
 @torch.no_grad()
 def plot_sample_output_patterns(model, dataset, device, sample_indices, save_path=None, no_show=False):
     plt = configure_matplotlib_backend(no_show=no_show)
@@ -342,13 +404,7 @@ def plot_sample_output_patterns(model, dataset, device, sample_indices, save_pat
         raise ValueError("sample_indices must not be empty")
 
     model.eval()
-    samples = []
-    targets = []
-    for index in sample_indices:
-        sample, target = dataset[index]
-        samples.append(sample)
-        targets.append(target)
-
+    samples, targets = _collect_indexed_samples(dataset, sample_indices)
     inputs = torch.stack(samples).to(device)
     outputs = model.output_intensity(inputs).cpu()
     class_names = getattr(dataset, "classes", None)
@@ -356,17 +412,8 @@ def plot_sample_output_patterns(model, dataset, device, sample_indices, save_pat
     fig, axes = plt.subplots(len(sample_indices), 2, figsize=(8, 3 * len(sample_indices)), squeeze=False)
     for row, (index, sample, target) in enumerate(zip(sample_indices, samples, targets)):
         input_ax, output_ax = axes[row]
-        sample_cpu = sample.detach().cpu()
-        if sample_cpu.ndim == 3 and sample_cpu.shape[0] == 1:
-            input_ax.imshow(sample_cpu[0].numpy(), cmap="gray")
-        elif sample_cpu.ndim == 3 and sample_cpu.shape[0] in (3, 4):
-            input_ax.imshow(sample_cpu[:3].permute(1, 2, 0).clamp(0, 1).numpy())
-        else:
-            input_ax.imshow(sample_cpu.squeeze().numpy(), cmap="gray")
-
-        target_index = int(target) if not torch.is_tensor(target) else int(target.item())
-        target_label = class_names[target_index] if class_names and target_index < len(class_names) else str(target_index)
-        input_ax.set_title(f"Input {index} | {target_label}")
+        _plot_input_sample(input_ax, sample)
+        input_ax.set_title(f"Input {index} | {_target_label(target, class_names)}")
         input_ax.axis("off")
 
         output_ax.imshow(outputs[row].numpy(), cmap="magma")
@@ -380,6 +427,48 @@ def plot_sample_output_patterns(model, dataset, device, sample_indices, save_pat
         print(f"Saved: {save_path}")
     maybe_show(no_show)
     plt.close(fig)
+
+
+def _clone_layer_phases(model):
+    return [layer.phase.detach().clone() for layer in model.layers]
+
+
+def _restore_layer_phases(model, original_phases):
+    for layer, original in zip(model.layers, original_phases):
+        layer.phase.copy_(original)
+
+
+def _evaluate_quantized_level(model, test_loader, device, original_phases, level):
+    _restore_layer_phases(model, original_phases)
+    quantized = quantize_phase_masks_uniform(model.export_phase_masks(wrap=True), level)
+    for layer, phase_mask in zip(model.layers, quantized):
+        layer.phase.copy_(phase_mask.to(device=layer.phase.device, dtype=layer.phase.dtype))
+    metrics = evaluate_classification(model, test_loader, device)
+    return str(level), metrics["accuracy"]
+
+
+def _quantization_title(dataset_cfg, manifest):
+    title_bits = [dataset_cfg.get("display_name", "Classification")]
+    if manifest:
+        run_name = manifest.get("run_name")
+        if run_name:
+            title_bits.append(str(run_name))
+        seed = manifest.get("seed")
+        if seed is not None:
+            title_bits.append(f"seed={seed}")
+    return "Quantization Sensitivity\n" + " | ".join(title_bits)
+
+
+def _annotate_accuracy_bars(ax, bars, accuracies):
+    for bar, accuracy in zip(bars, accuracies):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + 0.5,
+            f"{accuracy:.2f}%",
+            ha="center",
+            va="bottom",
+            fontsize=8,
+        )
 
 
 @torch.no_grad()
@@ -402,23 +491,14 @@ def plot_quantization_sensitivity(
     model.eval()
     baseline_metrics = evaluate_classification(model, test_loader, device)
     baseline_acc = baseline_metrics["accuracy"]
-    original_phases = [layer.phase.detach().clone() for layer in model.layers]
+    original_phases = _clone_layer_phases(model)
 
     results = [("baseline", baseline_acc)]
     try:
         for level in levels:
-            for layer, original in zip(model.layers, original_phases):
-                layer.phase.copy_(original)
-
-            quantized = quantize_phase_masks_uniform(model.export_phase_masks(wrap=True), level)
-            for layer, phase_mask in zip(model.layers, quantized):
-                layer.phase.copy_(phase_mask.to(device=layer.phase.device, dtype=layer.phase.dtype))
-
-            metrics = evaluate_classification(model, test_loader, device)
-            results.append((str(level), metrics["accuracy"]))
+            results.append(_evaluate_quantized_level(model, test_loader, device, original_phases, level))
     finally:
-        for layer, original in zip(model.layers, original_phases):
-            layer.phase.copy_(original)
+        _restore_layer_phases(model, original_phases)
 
     labels = [name for name, _ in results]
     accuracies = [accuracy for _, accuracy in results]
@@ -432,25 +512,8 @@ def plot_quantization_sensitivity(
     ax.set_ylim(0, max(100.0, max(accuracies) * 1.15))
     ax.axhline(baseline_acc, color="#2b6cb0", linestyle="--", linewidth=1, alpha=0.5)
 
-    for bar, accuracy in zip(bars, accuracies):
-        ax.text(
-            bar.get_x() + bar.get_width() / 2,
-            bar.get_height() + 0.5,
-            f"{accuracy:.2f}%",
-            ha="center",
-            va="bottom",
-            fontsize=8,
-        )
-
-    title_bits = [dataset_cfg.get("display_name", "Classification")]
-    if manifest:
-        run_name = manifest.get("run_name")
-        if run_name:
-            title_bits.append(str(run_name))
-        seed = manifest.get("seed")
-        if seed is not None:
-            title_bits.append(f"seed={seed}")
-    ax.set_title("Quantization Sensitivity\n" + " | ".join(title_bits))
+    _annotate_accuracy_bars(ax, bars, accuracies)
+    ax.set_title(_quantization_title(dataset_cfg, manifest))
     fig.tight_layout()
     if save_path:
         plt.savefig(save_path, dpi=150, bbox_inches="tight")
@@ -459,14 +522,29 @@ def plot_quantization_sensitivity(
     plt.close(fig)
 
 
-def plot_classification_history(history, save_path=None, no_show=False):
-    plt = configure_matplotlib_backend(no_show=no_show)
+def _history_metric_series(history, metric_name):
     train_history = history.get("train", {}) if history else {}
     val_history = history.get("val", {}) if history else {}
-    train_accuracy = list(train_history.get("accuracy", ()))
-    val_accuracy = list(val_history.get("accuracy", ()))
-    train_contrast = list(train_history.get("contrast", ()))
-    val_contrast = list(val_history.get("contrast", ()))
+    return list(train_history.get(metric_name, ())), list(val_history.get(metric_name, ()))
+
+
+def _plot_history_metric(ax, *, title, ylabel, train_values, val_values):
+    if train_values:
+        ax.plot(range(1, len(train_values) + 1), train_values, label="train", color="#2563eb", linewidth=2)
+    if val_values:
+        ax.plot(range(1, len(val_values) + 1), val_values, label="val", color="#dc2626", linewidth=2)
+    ax.set_title(title)
+    ax.set_xlabel("Epoch")
+    ax.set_ylabel(ylabel)
+    ax.grid(alpha=0.2)
+    if train_values or val_values:
+        ax.legend()
+
+
+def plot_classification_history(history, save_path=None, no_show=False):
+    plt = configure_matplotlib_backend(no_show=no_show)
+    train_accuracy, val_accuracy = _history_metric_series(history, "accuracy")
+    train_contrast, val_contrast = _history_metric_series(history, "contrast")
     epochs = list(range(1, max(len(train_accuracy), len(val_accuracy), len(train_contrast), len(val_contrast)) + 1))
 
     if not epochs:
@@ -474,28 +552,20 @@ def plot_classification_history(history, save_path=None, no_show=False):
 
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
     accuracy_ax, contrast_ax = axes
-
-    if train_accuracy:
-        accuracy_ax.plot(range(1, len(train_accuracy) + 1), train_accuracy, label="train", color="#2563eb", linewidth=2)
-    if val_accuracy:
-        accuracy_ax.plot(range(1, len(val_accuracy) + 1), val_accuracy, label="val", color="#dc2626", linewidth=2)
-    accuracy_ax.set_title("Accuracy")
-    accuracy_ax.set_xlabel("Epoch")
-    accuracy_ax.set_ylabel("Accuracy (%)")
-    accuracy_ax.grid(alpha=0.2)
-    if train_accuracy or val_accuracy:
-        accuracy_ax.legend()
-
-    if train_contrast:
-        contrast_ax.plot(range(1, len(train_contrast) + 1), train_contrast, label="train", color="#2563eb", linewidth=2)
-    if val_contrast:
-        contrast_ax.plot(range(1, len(val_contrast) + 1), val_contrast, label="val", color="#dc2626", linewidth=2)
-    contrast_ax.set_title("Detector Contrast")
-    contrast_ax.set_xlabel("Epoch")
-    contrast_ax.set_ylabel("Contrast")
-    contrast_ax.grid(alpha=0.2)
-    if train_contrast or val_contrast:
-        contrast_ax.legend()
+    _plot_history_metric(
+        accuracy_ax,
+        title="Accuracy",
+        ylabel="Accuracy (%)",
+        train_values=train_accuracy,
+        val_values=val_accuracy,
+    )
+    _plot_history_metric(
+        contrast_ax,
+        title="Detector Contrast",
+        ylabel="Contrast",
+        train_values=train_contrast,
+        val_values=val_contrast,
+    )
 
     fig.suptitle("Classification Training History", fontsize=14)
     fig.tight_layout()
@@ -506,8 +576,48 @@ def plot_classification_history(history, save_path=None, no_show=False):
     plt.close(fig)
 
 
-def build_experiment_grid(grid_name, args):
-    base = {
+EXPERIMENT_GRID_VARIANTS = {
+    "coherent_amplitude_positions": {
+        "experiment_stage": "placement_ablation",
+        "activation_type": "coherent_amplitude",
+        "activation_preset": "balanced",
+        "activation_placements": ("front", "mid", "back", "all"),
+    },
+    "coherent_amplitude_presets": {
+        "experiment_stage": "mechanism_tuning",
+        "activation_type": "coherent_amplitude",
+        "activation_presets": ("conservative", "balanced", "aggressive"),
+        "activation_placement": "mid",
+    },
+    "coherent_phase_presets": {
+        "experiment_stage": "mechanism_tuning",
+        "activation_type": "coherent_phase",
+        "activation_presets": ("conservative", "balanced", "aggressive"),
+        "activation_placement": "mid",
+    },
+    "coherent_activation_mechanisms": {
+        "experiment_stage": "mechanism_ablation",
+        "activation_types": ("coherent_amplitude", "coherent_phase"),
+        "activation_preset": "balanced",
+        "activation_placement": "mid",
+    },
+    "incoherent_intensity_presets": {
+        "experiment_stage": "mechanism_tuning",
+        "activation_type": "incoherent_intensity",
+        "activation_presets": ("conservative", "balanced", "aggressive"),
+        "activation_placement": "mid",
+    },
+    "activation_mechanisms": {
+        "experiment_stage": "mechanism_ablation",
+        "activation_types": ("coherent_amplitude", "coherent_phase", "incoherent_intensity"),
+        "activation_preset": "balanced",
+        "activation_placement": "mid",
+    },
+}
+
+
+def _experiment_grid_base(args):
+    return {
         "task": args.task,
         "dataset": args.dataset,
         "layers": args.layers,
@@ -522,79 +632,30 @@ def build_experiment_grid(grid_name, args):
         "optics_preset": args.optics_preset,
     }
 
-    if grid_name == "coherent_amplitude_positions":
-        return [
-            {
-                **base,
-                "experiment_stage": "placement_ablation",
-                "activation_type": "coherent_amplitude",
-                "activation_preset": "balanced",
-                "activation_placement": placement,
-            }
-            for placement in ("front", "mid", "back", "all")
-        ]
 
-    if grid_name == "coherent_amplitude_presets":
-        return [
-            {
-                **base,
-                "experiment_stage": "mechanism_tuning",
-                "activation_type": "coherent_amplitude",
-                "activation_preset": preset,
-                "activation_placement": "mid",
-            }
-            for preset in ("conservative", "balanced", "aggressive")
-        ]
+def _experiment_grid_sweep_key(variant):
+    if "activation_placements" in variant:
+        return "activation_placement", variant["activation_placements"]
+    if "activation_presets" in variant:
+        return "activation_preset", variant["activation_presets"]
+    if "activation_types" in variant:
+        return "activation_type", variant["activation_types"]
+    raise ValueError("Experiment grid variant is missing a sweep dimension")
 
-    if grid_name == "coherent_phase_presets":
-        return [
-            {
-                **base,
-                "experiment_stage": "mechanism_tuning",
-                "activation_type": "coherent_phase",
-                "activation_preset": preset,
-                "activation_placement": "mid",
-            }
-            for preset in ("conservative", "balanced", "aggressive")
-        ]
 
-    if grid_name == "coherent_activation_mechanisms":
-        return [
-            {
-                **base,
-                "experiment_stage": "mechanism_ablation",
-                "activation_type": activation_type,
-                "activation_preset": "balanced",
-                "activation_placement": "mid",
-            }
-            for activation_type in ("coherent_amplitude", "coherent_phase")
-        ]
+def build_experiment_grid(grid_name, args):
+    variant = EXPERIMENT_GRID_VARIANTS.get(grid_name)
+    if variant is None:
+        raise ValueError(f"Unsupported experiment grid: {grid_name}")
 
-    if grid_name == "incoherent_intensity_presets":
-        return [
-            {
-                **base,
-                "experiment_stage": "mechanism_tuning",
-                "activation_type": "incoherent_intensity",
-                "activation_preset": preset,
-                "activation_placement": "mid",
-            }
-            for preset in ("conservative", "balanced", "aggressive")
-        ]
-
-    if grid_name == "activation_mechanisms":
-        return [
-            {
-                **base,
-                "experiment_stage": "mechanism_ablation",
-                "activation_type": activation_type,
-                "activation_preset": "balanced",
-                "activation_placement": "mid",
-            }
-            for activation_type in ("coherent_amplitude", "coherent_phase", "incoherent_intensity")
-        ]
-
-    raise ValueError(f"Unsupported experiment grid: {grid_name}")
+    sweep_key, sweep_values = _experiment_grid_sweep_key(variant)
+    static_fields = {
+        key: value
+        for key, value in variant.items()
+        if key not in ("activation_placements", "activation_presets", "activation_types")
+    }
+    base = _experiment_grid_base(args)
+    return [{**base, **static_fields, sweep_key: value} for value in sweep_values]
 
 
 def format_experiment_grid_commands(grid_name, args):
@@ -632,33 +693,43 @@ def execute_experiment_grid(grid_name, args, runner):
         runner(spec_args)
 
 
-@torch.no_grad()
-def plot_output_energy(model, test_loader, device, class_names, save_path=None, no_show=False):
-    plt = configure_matplotlib_backend(no_show=no_show)
-    model.eval()
-    size = model.size
-    num_classes = model.num_classes
-    energy_maps = torch.zeros(num_classes, size, size)
-    counts = torch.zeros(num_classes)
+def _empty_energy_accumulators(model):
+    energy_maps = torch.zeros(model.num_classes, model.size, model.size)
+    counts = torch.zeros(model.num_classes)
+    return energy_maps, counts
 
-    for data, target in test_loader:
+
+def _accumulate_output_energy(model, loader, device, energy_maps, counts):
+    for data, target in loader:
         data, target = data.to(device), target.to(device)
         intensity = model.output_intensity(data).cpu()
         target_cpu = target.cpu()
 
-        for i in range(num_classes):
-            mask = target_cpu == i
+        for class_index in range(model.num_classes):
+            mask = target_cpu == class_index
             if mask.any():
-                energy_maps[i] += intensity[mask].sum(dim=0)
-                counts[i] += mask.sum()
+                energy_maps[class_index] += intensity[mask].sum(dim=0)
+                counts[class_index] += mask.sum()
+
+
+def _plot_output_energy_grid(axes, energy_maps, counts, class_names):
+    for class_index in range(len(class_names)):
+        ax = axes[class_index // 5, class_index % 5]
+        avg = energy_maps[class_index] / max(counts[class_index], 1)
+        ax.imshow(avg.numpy(), cmap="hot")
+        ax.set_title(class_names[class_index])
+        ax.axis("off")
+
+
+@torch.no_grad()
+def plot_output_energy(model, test_loader, device, class_names, save_path=None, no_show=False):
+    plt = configure_matplotlib_backend(no_show=no_show)
+    model.eval()
+    energy_maps, counts = _empty_energy_accumulators(model)
+    _accumulate_output_energy(model, test_loader, device, energy_maps, counts)
 
     fig, axes = plt.subplots(2, 5, figsize=(20, 8))
-    for i in range(num_classes):
-        ax = axes[i // 5, i % 5]
-        avg = energy_maps[i] / max(counts[i], 1)
-        ax.imshow(avg.numpy(), cmap="hot")
-        ax.set_title(class_names[i])
-        ax.axis("off")
+    _plot_output_energy_grid(axes, energy_maps, counts, class_names)
 
     fig.suptitle("Average Output Energy per Class", fontsize=14)
     plt.tight_layout()
@@ -669,22 +740,18 @@ def plot_output_energy(model, test_loader, device, class_names, save_path=None, 
     plt.close(fig)
 
 
-@torch.no_grad()
-def plot_confusion_matrix(model, test_loader, device, class_names, save_path=None, no_show=False):
-    plt = configure_matplotlib_backend(no_show=no_show)
-    model.eval()
-    num_classes = model.num_classes
-    confusion = torch.zeros(num_classes, num_classes, dtype=torch.int64)
-
-    for data, target in test_loader:
+def _build_confusion_matrix(model, loader, device):
+    confusion = torch.zeros(model.num_classes, model.num_classes, dtype=torch.int64)
+    for data, target in loader:
         data, target = data.to(device), target.to(device)
-        output = model(data)
-        pred = output.argmax(dim=1)
-        for t, p in zip(target, pred):
-            confusion[t.item(), p.item()] += 1
+        pred = model(data).argmax(dim=1)
+        for true_label, predicted_label in zip(target, pred):
+            confusion[true_label.item(), predicted_label.item()] += 1
+    return confusion
 
-    fig, ax = plt.subplots(figsize=(8, 8))
-    im = ax.imshow(confusion.numpy(), cmap="Blues")
+
+def _configure_confusion_axes(ax, class_names):
+    num_classes = len(class_names)
     ax.set_xlabel("Predicted")
     ax.set_ylabel("True")
     ax.set_xticks(range(num_classes))
@@ -693,17 +760,40 @@ def plot_confusion_matrix(model, test_loader, device, class_names, save_path=Non
     ax.set_yticklabels(class_names)
     ax.set_title("Confusion Matrix")
 
-    for i in range(num_classes):
-        for j in range(num_classes):
+
+def _validate_class_names(class_names, num_classes):
+    if len(class_names) != num_classes:
+        raise ValueError(f"class_names length {len(class_names)} does not match num_classes {num_classes}")
+
+
+def _annotate_confusion_matrix(ax, confusion):
+    threshold = confusion.max() / 2
+    num_classes = confusion.shape[0]
+    for true_index in range(num_classes):
+        for predicted_index in range(num_classes):
+            value = confusion[true_index, predicted_index]
             ax.text(
-                j,
-                i,
-                str(confusion[i, j].item()),
+                predicted_index,
+                true_index,
+                str(value.item()),
                 ha="center",
                 va="center",
-                color="white" if confusion[i, j] > confusion.max() / 2 else "black",
+                color="white" if value > threshold else "black",
                 fontsize=8,
             )
+
+
+@torch.no_grad()
+def plot_confusion_matrix(model, test_loader, device, class_names, save_path=None, no_show=False):
+    plt = configure_matplotlib_backend(no_show=no_show)
+    model.eval()
+    _validate_class_names(class_names, model.num_classes)
+    confusion = _build_confusion_matrix(model, test_loader, device)
+
+    fig, ax = plt.subplots(figsize=(8, 8))
+    im = ax.imshow(confusion.numpy(), cmap="Blues")
+    _configure_confusion_axes(ax, class_names)
+    _annotate_confusion_matrix(ax, confusion)
 
     fig.colorbar(im, shrink=0.8)
     plt.tight_layout()

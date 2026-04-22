@@ -67,16 +67,45 @@ def is_better_classification_checkpoint(candidate, best):
     return candidate["epoch"] > best["epoch"]
 
 
+def _ensure_finite_tensors(named_tensors):
+    for name, tensor in named_tensors:
+        if not torch.isfinite(tensor).all():
+            raise ValueError(f"non-finite {name}")
+
+
+def _empty_classification_totals():
+    return {"loss": 0.0, "mse": 0.0, "ce": 0.0, "reg": 0.0, "contrast": 0.0, "correct": 0, "total": 0}
+
+
+def _accumulate_classification_batch(totals, *, data, target, result, loss_terms):
+    batch_size = data.size(0)
+    pred = result["scores"].argmax(dim=1)
+    totals["loss"] += loss_terms["total"].item() * batch_size
+    totals["mse"] += loss_terms["mse"].item() * batch_size
+    totals["ce"] += loss_terms["ce"].item() * batch_size
+    totals["reg"] += loss_terms["reg"].item() * batch_size
+    totals["contrast"] += result["contrast"].mean().item() * batch_size
+    totals["correct"] += pred.eq(target).sum().item()
+    totals["total"] += batch_size
+    return pred
+
+
+def _classification_epoch_summary(totals):
+    total = totals["total"]
+    return {
+        "loss": totals["loss"] / total,
+        "mse": totals["mse"] / total,
+        "ce": totals["ce"] / total,
+        "reg": totals["reg"] / total,
+        "accuracy": 100.0 * totals["correct"] / total,
+        "contrast": totals["contrast"] / total,
+    }
+
+
 def _run_classification_epoch(model, loader, device, *, optimizer=None, alpha=1.0, beta=0.1, gamma=0.01):
     training = optimizer is not None
     model.train(mode=training)
-    total_loss = 0.0
-    total_mse = 0.0
-    total_ce = 0.0
-    total_reg = 0.0
-    total_contrast = 0.0
-    correct = 0
-    total = 0
+    totals = _empty_classification_totals()
 
     with torch.set_grad_enabled(training):
         for batch_idx, (data, target) in enumerate(loader):
@@ -85,48 +114,35 @@ def _run_classification_epoch(model, loader, device, *, optimizer=None, alpha=1.
                 optimizer.zero_grad()
 
             result = model.forward_with_metrics(data, target=target)
-            if not torch.isfinite(result["scores"]).all():
-                raise ValueError("non-finite scores")
-            if not torch.isfinite(result["logits"]).all():
-                raise ValueError("non-finite logits")
-            if not torch.isfinite(result["contrast"]).all():
-                raise ValueError("non-finite contrast")
+            _ensure_finite_tensors(
+                (
+                    ("scores", result["scores"]),
+                    ("logits", result["logits"]),
+                    ("contrast", result["contrast"]),
+                )
+            )
 
             loss_terms = classification_composite_loss(result, target, model, alpha=alpha, beta=beta, gamma=gamma)
-            if not torch.isfinite(loss_terms["total"]).all():
-                raise ValueError("non-finite loss")
-            if not torch.isfinite(loss_terms["mse"]).all():
-                raise ValueError("non-finite mse")
-            if not torch.isfinite(loss_terms["ce"]).all():
-                raise ValueError("non-finite ce")
-            if not torch.isfinite(loss_terms["reg"]).all():
-                raise ValueError("non-finite reg")
+            _ensure_finite_tensors(
+                (
+                    ("loss", loss_terms["total"]),
+                    ("mse", loss_terms["mse"]),
+                    ("ce", loss_terms["ce"]),
+                    ("reg", loss_terms["reg"]),
+                )
+            )
             if training:
                 loss_terms["total"].backward()
                 optimizer.step()
 
-            total_loss += loss_terms["total"].item() * data.size(0)
-            total_mse += loss_terms["mse"].item() * data.size(0)
-            total_ce += loss_terms["ce"].item() * data.size(0)
-            total_reg += loss_terms["reg"].item() * data.size(0)
-            total_contrast += result["contrast"].mean().item() * data.size(0)
-            pred = result["scores"].argmax(dim=1)
-            correct += pred.eq(target).sum().item()
-            total += data.size(0)
+            pred = _accumulate_classification_batch(totals, data=data, target=target, result=result, loss_terms=loss_terms)
 
             if training and (batch_idx + 1) % 100 == 0:
                 print(f"  batch {batch_idx + 1}/{len(loader)}, loss: {loss_terms['total'].item():.4f}")
 
             del result, loss_terms, pred
 
-    return {
-        "loss": total_loss / total,
-        "mse": total_mse / total,
-        "ce": total_ce / total,
-        "reg": total_reg / total,
-        "accuracy": 100.0 * correct / total,
-        "contrast": total_contrast / total,
-    }
+    return _classification_epoch_summary(totals)
 
 
 @torch.no_grad()

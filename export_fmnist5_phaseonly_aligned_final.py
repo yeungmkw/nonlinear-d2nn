@@ -242,20 +242,28 @@ def load_lab_config(path: Path) -> dict[str, float | bool]:
     }
 
 
+def _lab_input_value(args: argparse.Namespace, config_values: dict, field_name: str):
+    cli_value = getattr(args, field_name)
+    return cli_value if cli_value is not None else config_values.get(field_name)
+
+
+def _missing_lab_fields(resolved: dict[str, float | int | bool]) -> list[str]:
+    return [field for field in REQUIRED_LAB_FIELDS if resolved.get(field) is None]
+
+
 def resolve_lab_inputs(args: argparse.Namespace) -> dict[str, float | int | bool]:
     config_values: dict[str, float | bool] = {}
     if args.lab_config is not None:
         config_values = load_lab_config(args.lab_config)
 
     resolved = {
-        "refractive_index": args.refractive_index if args.refractive_index is not None else config_values.get("refractive_index"),
-        "ambient_index": args.ambient_index if args.ambient_index is not None else config_values.get("ambient_index"),
-        "base_thickness_um": args.base_thickness_um if args.base_thickness_um is not None else config_values.get("base_thickness_um"),
-        "max_relief_um": args.max_relief_um if args.max_relief_um is not None else config_values.get("max_relief_um"),
-        "quantization_levels": args.quantization_levels if args.quantization_levels is not None else config_values.get("quantization_levels"),
-        "export_stl": bool(args.export_stl or config_values.get("export_stl", False)),
+        field_name: _lab_input_value(args, config_values, field_name)
+        for field_name in REQUIRED_LAB_FIELDS
     }
-    missing = [field for field in REQUIRED_LAB_FIELDS if resolved.get(field) is None]
+    resolved.update({
+        "export_stl": bool(args.export_stl or config_values.get("export_stl", False)),
+    })
+    missing = _missing_lab_fields(resolved)
     if missing:
         raise ValueError("Missing required lab inputs after merging CLI and lab config: " + ", ".join(missing))
     return resolved
@@ -287,19 +295,13 @@ def _read_metadata(export_root: Path) -> dict:
     return json.loads(metadata_path.read_text(encoding="utf-8"))
 
 
-def build_validation_summary(export_root: Path) -> dict:
-    export_root = Path(export_root)
-    repo_root = Path(__file__).resolve().parent
-    issues: list[str] = []
-    missing_files = [name for name in REQUIRED_EXPORT_FILES if not (export_root / name).exists()]
-    if missing_files:
-        issues.extend(f"Missing required export file: {name}" for name in missing_files)
+def _missing_required_export_files(export_root: Path) -> list[str]:
+    return [name for name in REQUIRED_EXPORT_FILES if not (export_root / name).exists()]
 
-    metadata = _read_metadata(export_root) if (export_root / "metadata.json").exists() else {}
-    readiness = metadata.get("fabrication_readiness", {})
+
+def _metadata_issues(export_root: Path, metadata: dict, repo_root: Path) -> list[str]:
+    issues: list[str] = []
     manufacturing = metadata.get("manufacturing", {})
-    clipped_fraction = float(readiness.get("clipped_fraction", 0.0) or 0.0)
-    clipped_pixels = int(readiness.get("clipped_pixels", 0) or 0)
 
     checkpoint_value = metadata.get("checkpoint")
     expected_checkpoint = (repo_root / OFFICIAL_PRESET["checkpoint"]).resolve()
@@ -316,19 +318,43 @@ def build_validation_summary(export_root: Path) -> dict:
     if manufacturing.get("export_stl") and not (export_root / "stl").exists():
         issues.append("STL export was requested but the stl/ directory is missing")
 
-    warnings: list[str] = []
+    return issues
+
+
+def _clipping_warnings(clipped_pixels: int, clipped_fraction: float) -> list[str]:
     if clipped_fraction > 0:
-        warnings.append(
+        return [
             f"Clipping detected: {clipped_pixels} pixels ({clipped_fraction:.2%}) exceed the relief limit."
-        )
+        ]
+    return []
 
+
+def _validation_status(*, missing_files: list[str], clipped_fraction: float, warnings: list[str]) -> str:
     if missing_files or clipped_fraction > WARN_CLIPPED_FRACTION_MAX:
-        status = "STOP"
-    elif warnings:
-        status = "WARN"
-    else:
-        status = "PASS"
+        return "STOP"
+    if warnings:
+        return "WARN"
+    return "PASS"
 
+
+def build_validation_summary(export_root: Path) -> dict:
+    export_root = Path(export_root)
+    repo_root = Path(__file__).resolve().parent
+    missing_files = _missing_required_export_files(export_root)
+    metadata = _read_metadata(export_root) if (export_root / "metadata.json").exists() else {}
+    readiness = metadata.get("fabrication_readiness", {})
+    clipped_fraction = float(readiness.get("clipped_fraction", 0.0) or 0.0)
+    clipped_pixels = int(readiness.get("clipped_pixels", 0) or 0)
+    checkpoint_value = metadata.get("checkpoint")
+
+    issues = [f"Missing required export file: {name}" for name in missing_files]
+    issues.extend(_metadata_issues(export_root, metadata, repo_root))
+    warnings = _clipping_warnings(clipped_pixels, clipped_fraction)
+    status = _validation_status(
+        missing_files=missing_files,
+        clipped_fraction=clipped_fraction,
+        warnings=warnings,
+    )
     all_issues = issues + warnings
     return {
         "status": status,

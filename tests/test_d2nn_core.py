@@ -69,18 +69,21 @@ from train_core import (
     is_better_classification_checkpoint,
 )
 from tasks import (
-    build_classification_test_loader,
     build_classification_transform,
     build_experiment_grid,
     classification_split_lengths,
     execute_experiment_grid,
     format_experiment_grid_commands,
+    format_activation_diagnostics,
     get_classification_dataset_config,
     plot_classification_history,
+    plot_confusion_matrix,
+    plot_output_energy,
     plot_quantization_sensitivity,
     plot_sample_output_patterns,
     resolve_activation_config,
     resolve_experiment_seed,
+    resolve_propagation_config,
 )
 from visualize import build_parser as build_visualize_parser
 
@@ -1751,6 +1754,51 @@ class D2NNCoreTests(unittest.TestCase):
             plot_sample_output_patterns(model, dataset, torch.device("cpu"), [0, 2], save_path=save_path, no_show=True)
             self.assertTrue(save_path.exists())
 
+    def test_plot_output_energy_writes_figure(self):
+        from torch.utils.data import DataLoader, TensorDataset
+
+        model = D2NN(**CLASSIFIER_PAPER_OPTICS.with_overrides(size=16, num_layers=2).classifier_model_kwargs())
+        dataset = TensorDataset(
+            torch.rand(4, 1, 28, 28),
+            torch.tensor([0, 1, 0, 1]),
+        )
+        loader = DataLoader(dataset, batch_size=2, shuffle=False)
+        class_names = [str(index) for index in range(model.num_classes)]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            save_path = Path(tmpdir) / "output_energy.png"
+            plot_output_energy(model, loader, torch.device("cpu"), class_names, save_path=save_path, no_show=True)
+            self.assertTrue(save_path.exists())
+
+    def test_plot_confusion_matrix_writes_figure(self):
+        from torch.utils.data import DataLoader, TensorDataset
+
+        model = D2NN(**CLASSIFIER_PAPER_OPTICS.with_overrides(size=16, num_layers=2).classifier_model_kwargs())
+        dataset = TensorDataset(
+            torch.rand(4, 1, 28, 28),
+            torch.tensor([0, 1, 0, 1]),
+        )
+        loader = DataLoader(dataset, batch_size=2, shuffle=False)
+        class_names = [str(index) for index in range(model.num_classes)]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            save_path = Path(tmpdir) / "confusion_matrix.png"
+            plot_confusion_matrix(model, loader, torch.device("cpu"), class_names, save_path=save_path, no_show=True)
+            self.assertTrue(save_path.exists())
+
+    def test_plot_confusion_matrix_rejects_class_name_count_mismatch(self):
+        from torch.utils.data import DataLoader, TensorDataset
+
+        model = D2NN(**CLASSIFIER_PAPER_OPTICS.with_overrides(size=16, num_layers=2).classifier_model_kwargs())
+        dataset = TensorDataset(
+            torch.rand(2, 1, 28, 28),
+            torch.tensor([0, 1]),
+        )
+        loader = DataLoader(dataset, batch_size=2, shuffle=False)
+
+        with self.assertRaises(ValueError):
+            plot_confusion_matrix(model, loader, torch.device("cpu"), ["zero"], no_show=True)
+
     def test_plot_quantization_sensitivity_restores_model_phases(self):
         from torch.utils.data import DataLoader, TensorDataset
 
@@ -1823,6 +1871,24 @@ class D2NNCoreTests(unittest.TestCase):
         self.assertEqual(resolve_experiment_seed(11, {"seed": 7}), 11)
         self.assertEqual(resolve_experiment_seed(None, {"seed": 7}), 7)
         self.assertEqual(resolve_experiment_seed(None, None), 42)
+
+    def test_resolve_propagation_config_preserves_manifest_fallback_for_blank_backend(self):
+        args = SimpleNamespace(rs_backend="", propagation_chunk_size=None)
+        manifest = {"propagation_backend": "fft", "propagation_chunk_size": 128}
+        self.assertEqual(resolve_propagation_config(args=args, manifest=manifest), ("fft", 128))
+        self.assertEqual(resolve_propagation_config(args=args, manifest={}), ("direct", None))
+
+    def test_format_activation_diagnostics_keeps_field_order_and_skips_empty_layers(self):
+        diagnostics = {
+            "1": {
+                "mean_intensity": 1.2,
+                "mean_gain": 0.5,
+                "mean_phase_shift": 0.25,
+                "mean_output_amplitude": 0.75,
+            },
+            "2": {"unknown": 1.0},
+        }
+        self.assertEqual(format_activation_diagnostics(diagnostics), "L1 gain=0.500, dphi=0.250, A=0.750, I=1.200")
 
     def test_classification_composite_loss_reports_all_terms(self):
         model = D2NN(**CLASSIFIER_PAPER_OPTICS.with_overrides(size=16, num_layers=2).classifier_model_kwargs())

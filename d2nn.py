@@ -216,39 +216,51 @@ class IncoherentIntensityActivation(FieldActivationBase):
         return emitted_amplitude.to(torch.cfloat)
 
 
+def _parse_activation_positions(positions):
+    raw_positions = positions.split(",") if isinstance(positions, str) else positions
+    return tuple(int(str(position).strip()) for position in raw_positions if str(position).strip())
+
+
+def _validate_activation_position(position, num_layers):
+    if position < 1 or position > num_layers:
+        raise ValueError(f"activation position {position} is outside 1..{num_layers}")
+
+
+def _dedupe_positions(positions):
+    normalized = []
+    for position in positions:
+        if position not in normalized:
+            normalized.append(position)
+    return tuple(normalized)
+
+
 def normalize_activation_positions(positions, num_layers):
     """Normalize 1-based layer indices used for inter-layer activation placement."""
     if positions in (None, "", ()):
         return ()
 
-    if isinstance(positions, str):
-        parts = [part.strip() for part in positions.split(",") if part.strip()]
-        positions = tuple(int(part) for part in parts)
-    else:
-        positions = tuple(int(position) for position in positions)
+    parsed_positions = _parse_activation_positions(positions)
+    for position in parsed_positions:
+        _validate_activation_position(position, num_layers)
+    return _dedupe_positions(parsed_positions)
 
-    normalized = []
-    for position in positions:
-        if position < 1 or position > num_layers:
-            raise ValueError(f"activation position {position} is outside 1..{num_layers}")
-        if position not in normalized:
-            normalized.append(position)
-    return tuple(normalized)
+
+ACTIVATION_MODULES = {
+    "identity": IdentityActivation,
+    "coherent_amplitude": CoherentAmplitudeActivation,
+    "coherent_phase": CoherentPhaseActivation,
+    "incoherent_intensity": IncoherentIntensityActivation,
+}
 
 
 def build_activation_module(activation_type, activation_hparams=None):
     activation_hparams = dict(activation_hparams or {})
     if activation_type in (None, "none"):
         return None
-    if activation_type == "identity":
-        return IdentityActivation()
-    if activation_type == "coherent_amplitude":
-        return CoherentAmplitudeActivation(**activation_hparams)
-    if activation_type == "coherent_phase":
-        return CoherentPhaseActivation(**activation_hparams)
-    if activation_type == "incoherent_intensity":
-        return IncoherentIntensityActivation(**activation_hparams)
-    raise ValueError(f"Unsupported activation type: {activation_type}")
+    activation_cls = ACTIVATION_MODULES.get(activation_type)
+    if activation_cls is None:
+        raise ValueError(f"Unsupported activation type: {activation_type}")
+    return activation_cls(**activation_hparams)
 
 
 class RayleighSommerfeldPropagation(nn.Module):

@@ -164,6 +164,64 @@ def infer_architecture(state_dict):
     return {"num_layers": len(layer_indices), "size": size}
 
 
+def _missing_optics_fields(manifest_optics: dict[str, Any], explicit_values: dict[str, Any], fields: tuple[str, ...]):
+    return [
+        field_name
+        for field_name in fields
+        if explicit_values.get(field_name) is None and manifest_optics.get(field_name) is None
+    ]
+
+
+def _ensure_manifest_has_split_distances(
+    *,
+    manifest_optics: dict[str, Any],
+    explicit_values: dict[str, Any],
+    checkpoint_path,
+) -> None:
+    missing_split_fields = _missing_optics_fields(
+        manifest_optics,
+        explicit_values,
+        ("input_distance", "output_distance"),
+    )
+    if not missing_split_fields:
+        return
+
+    missing_summary = ", ".join(missing_split_fields)
+    raise ValueError(
+        f"Checkpoint {checkpoint_path or '<in-memory>'} uses a legacy manifest optical config that is missing "
+        f"{missing_summary}. Supply the split distances explicitly or regenerate the checkpoint manifest with "
+        "input/output propagation distances."
+    )
+
+
+def _ensure_preset_manifest_is_complete(
+    *,
+    preset_hint: str | None,
+    manifest_optics: dict[str, Any],
+    explicit_values: dict[str, Any],
+    checkpoint_path,
+) -> None:
+    if preset_hint in (None, "", "paper"):
+        return
+
+    missing_fields = _missing_optics_fields(
+        manifest_optics,
+        explicit_values,
+        ("wavelength", "layer_distance", "pixel_size", "input_distance", "output_distance"),
+    )
+    if not missing_fields:
+        return
+
+    raise ValueError(
+        f"Checkpoint {checkpoint_path} appears to use optics preset {preset_hint!r} but is missing its checkpoint "
+        "manifest optical config. Restore the adjacent .json manifest or pass the optical distances and sizes explicitly."
+    )
+
+
+def _manifest_value_or_explicit(manifest_optics: dict[str, Any], field_name: str, explicit_value):
+    return manifest_optics.get(field_name) if explicit_value is None else explicit_value
+
+
 def resolve_optics(
     base_optics: OpticalConfig,
     *,
@@ -181,49 +239,35 @@ def resolve_optics(
     manifest_optics = (manifest or {}).get("optical_config") or {}
     inferred = infer_architecture(state_dict) if state_dict is not None else {}
     preset_hint = infer_optics_preset_hint(checkpoint_path, manifest=manifest)
-    missing_split_fields = [
-        field_name
-        for field_name, explicit_value in (
-            ("input_distance", input_distance),
-            ("output_distance", output_distance),
-        )
-        if explicit_value is None and manifest_optics and manifest_optics.get(field_name) is None
-    ]
+    explicit_values = {
+        "wavelength": wavelength,
+        "layer_distance": layer_distance,
+        "pixel_size": pixel_size,
+        "input_distance": input_distance,
+        "output_distance": output_distance,
+    }
 
-    if missing_split_fields:
-        missing_summary = ", ".join(missing_split_fields)
-        raise ValueError(
-            f"Checkpoint {checkpoint_path or '<in-memory>'} uses a legacy manifest optical config that is missing "
-            f"{missing_summary}. Supply the split distances explicitly or regenerate the checkpoint manifest with "
-            "input/output propagation distances."
+    if manifest_optics:
+        _ensure_manifest_has_split_distances(
+            manifest_optics=manifest_optics,
+            explicit_values=explicit_values,
+            checkpoint_path=checkpoint_path,
         )
-
-    if preset_hint not in (None, "", "paper"):
-        missing_fields = [
-            field_name
-            for field_name, explicit_value in (
-                ("wavelength", wavelength),
-                ("layer_distance", layer_distance),
-                ("pixel_size", pixel_size),
-                ("input_distance", input_distance),
-                ("output_distance", output_distance),
-            )
-            if explicit_value is None and manifest_optics.get(field_name) is None
-        ]
-        if missing_fields:
-            raise ValueError(
-                f"Checkpoint {checkpoint_path} appears to use optics preset {preset_hint!r} but is missing its checkpoint "
-                "manifest optical config. Restore the adjacent .json manifest or pass the optical distances and sizes explicitly."
-            )
+    _ensure_preset_manifest_is_complete(
+        preset_hint=preset_hint,
+        manifest_optics=manifest_optics,
+        explicit_values=explicit_values,
+        checkpoint_path=checkpoint_path,
+    )
 
     resolved = base_optics.with_overrides(
         size=inferred.get("size") if size is None else size,
         num_layers=manifest_optics.get("num_layers", inferred.get("num_layers")) if num_layers is None else num_layers,
-        wavelength=manifest_optics.get("wavelength") if wavelength is None else wavelength,
-        layer_distance=manifest_optics.get("layer_distance") if layer_distance is None else layer_distance,
-        pixel_size=manifest_optics.get("pixel_size") if pixel_size is None else pixel_size,
-        input_distance=manifest_optics.get("input_distance") if input_distance is None else input_distance,
-        output_distance=manifest_optics.get("output_distance") if output_distance is None else output_distance,
+        wavelength=_manifest_value_or_explicit(manifest_optics, "wavelength", wavelength),
+        layer_distance=_manifest_value_or_explicit(manifest_optics, "layer_distance", layer_distance),
+        pixel_size=_manifest_value_or_explicit(manifest_optics, "pixel_size", pixel_size),
+        input_distance=_manifest_value_or_explicit(manifest_optics, "input_distance", input_distance),
+        output_distance=_manifest_value_or_explicit(manifest_optics, "output_distance", output_distance),
     )
     return resolved
 
@@ -299,6 +343,111 @@ def _format_run_value(value: Any) -> str:
 
 
 DEFAULT_CLASSIFICATION_LOSS_CONFIG = {"alpha": 1.0, "beta": 0.1, "gamma": 0.01}
+ORDERED_ACTIVATION_HPARAMS = (
+    "threshold",
+    "temperature",
+    "gain_min",
+    "gain_max",
+    "gamma",
+    "responsivity",
+    "emission_phase_mode",
+)
+
+
+def _has_nondefault_loss_config(loss_config: dict[str, Any]) -> bool:
+    return any(
+        value is not None and value != DEFAULT_CLASSIFICATION_LOSS_CONFIG.get(key)
+        for key, value in loss_config.items()
+    )
+
+
+def _is_default_experiment_run(
+    *,
+    activation_type: str | None,
+    loss_config: dict[str, Any],
+    propagation_backend: str | None,
+    propagation_chunk_size: int | None,
+    optics_preset: str | None,
+    layer_count: int | None,
+) -> bool:
+    return (
+        activation_type in (None, "", "none")
+        and not _has_nondefault_loss_config(loss_config)
+        and propagation_backend in (None, "", "direct")
+        and propagation_chunk_size is None
+        and optics_preset in (None, "", "paper")
+        and layer_count in (None, 5)
+    )
+
+
+def _append_activation_position_parts(parts: list[str], activation_positions) -> None:
+    if not activation_positions:
+        return
+    position_token = "-".join(str(int(position)) for position in activation_positions)
+    parts.append(f"pos-{position_token}")
+
+
+def _append_optics_topology_parts(parts: list[str], *, optics_preset: str | None, layer_count: int | None) -> None:
+    if optics_preset not in (None, "", "paper"):
+        parts.append(f"optics-{_format_run_value(optics_preset)}")
+    if layer_count not in (None, 5):
+        parts.append(f"layers-{int(layer_count)}")
+
+
+def _append_value_parts(parts: list[str], values: dict[str, Any], keys: tuple[str, ...]) -> None:
+    for key in keys:
+        value = values.get(key)
+        if value is None:
+            continue
+        token_key = key.replace("_", "-")
+        parts.append(f"{token_key}-{_format_run_value(value)}")
+
+
+def _append_propagation_parts(
+    parts: list[str],
+    *,
+    propagation_backend: str | None,
+    propagation_chunk_size: int | None,
+) -> None:
+    if propagation_backend not in (None, "", "direct"):
+        parts.append(f"rs-{_format_run_value(propagation_backend)}")
+    if propagation_chunk_size is not None:
+        parts.append(f"chunk-{_format_run_value(int(propagation_chunk_size))}")
+
+
+def _build_experiment_run_name_parts(
+    *,
+    experiment_stage: str | None,
+    activation_type: str | None,
+    activation_positions,
+    activation_hparams: dict[str, Any] | None,
+    seed: int | None,
+    loss_config: dict[str, Any],
+    propagation_backend: str | None,
+    propagation_chunk_size: int | None,
+    optics_preset: str | None,
+    layer_count: int | None,
+) -> list[str]:
+    stage_label = (experiment_stage or "nonlinear").replace("_", "-")
+    activation_label = str(activation_type or "none").replace("_", "-")
+    parts = [f"stage-{stage_label}", f"act-{activation_label}"]
+    _append_optics_topology_parts(parts, optics_preset=optics_preset, layer_count=layer_count)
+    _append_activation_position_parts(parts, activation_positions)
+    _append_value_parts(parts, activation_hparams or {}, ORDERED_ACTIVATION_HPARAMS)
+    _append_value_parts(parts, loss_config, ("alpha", "beta", "gamma"))
+    _append_propagation_parts(
+        parts,
+        propagation_backend=propagation_backend,
+        propagation_chunk_size=propagation_chunk_size,
+    )
+    if seed is not None:
+        parts.append(f"seed-{seed}")
+    return parts
+
+
+def _safe_join_run_name_parts(parts: list[str]) -> str | None:
+    safe_name = "__".join(_sanitize_run_name(part.lower()) for part in parts if part)
+    return safe_name or None
 
 
 def derive_experiment_run_name(
@@ -319,72 +468,29 @@ def derive_experiment_run_name(
         return run_name
 
     loss_config = dict(loss_config or {})
-    has_nondefault_loss_config = any(
-        value is not None and value != DEFAULT_CLASSIFICATION_LOSS_CONFIG.get(key)
-        for key, value in loss_config.items()
-    )
-
-    has_nondefault_propagation = (propagation_backend not in (None, "", "direct")) or (propagation_chunk_size is not None)
-    has_nondefault_optics = optics_preset not in (None, "", "paper")
-    has_nondefault_topology = layer_count not in (None, 5)
-
-    if (
-        activation_type in (None, "", "none")
-        and not has_nondefault_loss_config
-        and not has_nondefault_propagation
-        and not has_nondefault_optics
-        and not has_nondefault_topology
+    if _is_default_experiment_run(
+        activation_type=activation_type,
+        loss_config=loss_config,
+        propagation_backend=propagation_backend,
+        propagation_chunk_size=propagation_chunk_size,
+        optics_preset=optics_preset,
+        layer_count=layer_count,
     ):
         return None
 
-    stage_label = (experiment_stage or "nonlinear").replace("_", "-")
-    activation_label = str(activation_type or "none").replace("_", "-")
-    parts = [f"stage-{stage_label}", f"act-{activation_label}"]
-
-    if optics_preset not in (None, "", "paper"):
-        parts.append(f"optics-{_format_run_value(optics_preset)}")
-
-    if layer_count not in (None, 5):
-        parts.append(f"layers-{int(layer_count)}")
-
-    if activation_positions:
-        position_token = "-".join(str(int(position)) for position in activation_positions)
-        parts.append(f"pos-{position_token}")
-
-    ordered_hparams = (
-        "threshold",
-        "temperature",
-        "gain_min",
-        "gain_max",
-        "gamma",
-        "responsivity",
-        "emission_phase_mode",
+    parts = _build_experiment_run_name_parts(
+        experiment_stage=experiment_stage,
+        activation_type=activation_type,
+        activation_positions=activation_positions,
+        activation_hparams=activation_hparams,
+        seed=seed,
+        loss_config=loss_config,
+        propagation_backend=propagation_backend,
+        propagation_chunk_size=propagation_chunk_size,
+        optics_preset=optics_preset,
+        layer_count=layer_count,
     )
-    activation_hparams = activation_hparams or {}
-    for key in ordered_hparams:
-        value = activation_hparams.get(key)
-        if value is None:
-            continue
-        token_key = key.replace("_", "-")
-        parts.append(f"{token_key}-{_format_run_value(value)}")
-
-    for key in ("alpha", "beta", "gamma"):
-        value = loss_config.get(key)
-        if value is None:
-            continue
-        parts.append(f"{key}-{_format_run_value(value)}")
-
-    if propagation_backend not in (None, "", "direct"):
-        parts.append(f"rs-{_format_run_value(propagation_backend)}")
-
-    if propagation_chunk_size is not None:
-        parts.append(f"chunk-{_format_run_value(int(propagation_chunk_size))}")
-
-    if seed is not None:
-        parts.append(f"seed-{seed}")
-
-    safe_name = "__".join(_sanitize_run_name(part.lower()) for part in parts if part)
-    return safe_name or None
+    return _safe_join_run_name_parts(parts)
 
 
 def checkpoint_variant_path(checkpoint_path, run_name=None):
