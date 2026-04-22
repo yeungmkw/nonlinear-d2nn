@@ -1646,6 +1646,17 @@ class D2NNCoreTests(unittest.TestCase):
         self.assertEqual(IMAGER_PAPER_OPTICS.input_distance, 491.302e-3)
         self.assertEqual(IMAGER_PAPER_OPTICS.output_distance, 575.304e-3)
 
+    def test_optical_config_with_overrides_preserves_none_fields(self):
+        optics = CLASSIFIER_PAPER_OPTICS.with_overrides(
+            wavelength=None,
+            size=32,
+            num_layers=2,
+        )
+        self.assertEqual(optics.wavelength, CLASSIFIER_PAPER_OPTICS.wavelength)
+        self.assertEqual(optics.layer_distance, CLASSIFIER_PAPER_OPTICS.layer_distance)
+        self.assertEqual(optics.size, 32)
+        self.assertEqual(optics.num_layers, 2)
+
     def test_train_parser_accepts_seed_and_experiment_stage(self):
         args = build_parser().parse_args(["--seed", "7", "--experiment-stage", "placement_ablation"])
         self.assertEqual(args.seed, 7)
@@ -2475,6 +2486,14 @@ class D2NNCoreTests(unittest.TestCase):
         self.assertEqual(stats[0]["layer"], 1)
         self.assertAlmostEqual(stats[0]["height_mean_m"], 2e-6)
 
+    def test_build_layer_stats_allows_missing_thickness_map(self):
+        phase_masks = torch.zeros(1, 2, 2).numpy()
+        relief_map = torch.ones(1, 2, 2).numpy() * 3e-6
+        stats = build_layer_stats(phase_masks, relief_map)
+        self.assertIsNone(stats[0]["thickness_min_m"])
+        self.assertIsNone(stats[0]["thickness_max_m"])
+        self.assertIsNone(stats[0]["thickness_mean_m"])
+
     def test_apply_manufacturing_profile_adds_base_and_clips_relief(self):
         height_map = torch.tensor([[[0.0, 3e-6], [7e-6, 10e-6]]]).numpy()
         relief, thickness = apply_manufacturing_profile(
@@ -2507,6 +2526,21 @@ class D2NNCoreTests(unittest.TestCase):
         self.assertEqual(summary["total_pixels"], 4)
         self.assertAlmostEqual(summary["clipped_fraction"], 0.25)
         self.assertAlmostEqual(summary["pixel_size_m"], 1e-6)
+
+    def test_build_fabrication_readiness_summary_handles_empty_arrays(self):
+        empty = np.array([])
+        summary = build_fabrication_readiness_summary(
+            empty,
+            empty,
+            empty,
+            max_relief_m=None,
+            pixel_size_m=1e-6,
+        )
+        self.assertFalse(summary["has_relief_limit"])
+        self.assertIsNone(summary["max_relief_m"])
+        self.assertEqual(summary["raw_height_max_m"], 0.0)
+        self.assertEqual(summary["clipped_fraction"], 0.0)
+        self.assertEqual(summary["total_pixels"], 0)
 
     def test_write_export_report_includes_fabrication_readiness_section(self):
         layer_stats = [

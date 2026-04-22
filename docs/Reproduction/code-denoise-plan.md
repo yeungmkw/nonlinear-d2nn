@@ -87,8 +87,11 @@ Status: started.
 Initial targets:
 
 - `artifacts.py`
+  - `OpticalConfig.with_overrides`: reduced from B/8 to A/3 by using dataclass replacement with a filtered override map.
   - `derive_experiment_run_name`: reduced from D/28 to A/4 by extracting same-file private helpers.
   - `resolve_optics`: reduced from D/22 to B/7 by extracting same-file private validation helpers.
+  - `build_fabrication_readiness_summary`: reduced from B/6 to A/1 by extracting same-file array max, optional float, and clipping-count helpers.
+  - `build_layer_stats`: reduced from B/6 to A/3 by extracting same-file layer-entry and optional thickness-stat helpers.
 - `tasks.py`
   - `resolve_activation_config`: reduced from C/14 to A/5 by extracting same-file private source-resolution helpers.
   - `plot_quantization_sensitivity`: reduced from C/14 to B/6 by extracting same-file phase-restore, quantized-evaluation, title, and bar-annotation helpers.

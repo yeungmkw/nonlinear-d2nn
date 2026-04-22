@@ -5,7 +5,7 @@ manufacturing-oriented exports.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 import json
 import re
 from pathlib import Path
@@ -39,15 +39,20 @@ class OpticalConfig:
         size: int | None = None,
         num_layers: int | None = None,
     ) -> "OpticalConfig":
-        return OpticalConfig(
-            wavelength=self.wavelength if wavelength is None else wavelength,
-            layer_distance=self.layer_distance if layer_distance is None else layer_distance,
-            pixel_size=self.pixel_size if pixel_size is None else pixel_size,
-            input_distance=self.input_distance if input_distance is None else input_distance,
-            output_distance=self.output_distance if output_distance is None else output_distance,
-            size=self.size if size is None else size,
-            num_layers=self.num_layers if num_layers is None else num_layers,
-        )
+        overrides = {
+            key: value
+            for key, value in {
+                "wavelength": wavelength,
+                "layer_distance": layer_distance,
+                "pixel_size": pixel_size,
+                "input_distance": input_distance,
+                "output_distance": output_distance,
+                "size": size,
+                "num_layers": num_layers,
+            }.items()
+            if value is not None
+        }
+        return replace(self, **overrides)
 
     def classifier_model_kwargs(self, *, num_classes: int = 10) -> dict[str, Any]:
         return {
@@ -605,6 +610,23 @@ def apply_manufacturing_profile(
     return manufacturable_relief, thickness_map
 
 
+def _array_max_or_zero(values: np.ndarray) -> float:
+    values = np.asarray(values)
+    return float(values.max()) if values.size else 0.0
+
+
+def _optional_float(value: float | None) -> float | None:
+    return None if value is None else float(value)
+
+
+def _clipping_counts(raw_height_map: np.ndarray, manufacturable_relief: np.ndarray) -> tuple[int, int, float]:
+    clipped = np.abs(raw_height_map - manufacturable_relief) > 1e-12
+    total_pixels = int(raw_height_map.size)
+    clipped_pixels = int(np.count_nonzero(clipped))
+    clipped_fraction = float(clipped_pixels / total_pixels) if total_pixels else 0.0
+    return clipped_pixels, total_pixels, clipped_fraction
+
+
 def build_fabrication_readiness_summary(
     raw_height_map: np.ndarray,
     manufacturable_relief: np.ndarray,
@@ -616,17 +638,15 @@ def build_fabrication_readiness_summary(
     raw_height_map = np.asarray(raw_height_map)
     manufacturable_relief = np.asarray(manufacturable_relief)
     thickness_map = np.asarray(thickness_map)
-    clipped = np.abs(raw_height_map - manufacturable_relief) > 1e-12
-    total_pixels = int(raw_height_map.size)
-    clipped_pixels = int(np.count_nonzero(clipped))
+    clipped_pixels, total_pixels, clipped_fraction = _clipping_counts(raw_height_map, manufacturable_relief)
 
     return {
         "has_relief_limit": max_relief_m is not None,
-        "max_relief_m": None if max_relief_m is None else float(max_relief_m),
-        "raw_height_max_m": float(raw_height_map.max()) if raw_height_map.size else 0.0,
-        "manufacturable_height_max_m": float(manufacturable_relief.max()) if manufacturable_relief.size else 0.0,
-        "thickness_max_m": float(thickness_map.max()) if thickness_map.size else 0.0,
-        "clipped_fraction": float(clipped_pixels / total_pixels) if total_pixels else 0.0,
+        "max_relief_m": _optional_float(max_relief_m),
+        "raw_height_max_m": _array_max_or_zero(raw_height_map),
+        "manufacturable_height_max_m": _array_max_or_zero(manufacturable_relief),
+        "thickness_max_m": _array_max_or_zero(thickness_map),
+        "clipped_fraction": clipped_fraction,
         "clipped_pixels": clipped_pixels,
         "total_pixels": total_pixels,
         "pixel_size_m": float(pixel_size_m),
@@ -662,6 +682,37 @@ def phase_masks_to_bmp_uint8(phase_masks: np.ndarray) -> np.ndarray:
     return np.clip(scaled, 0, 255).astype(np.uint8)
 
 
+def _thickness_layer_stats(thickness_layer: np.ndarray | None) -> dict[str, float | None]:
+    if thickness_layer is None:
+        return {
+            "thickness_min_m": None,
+            "thickness_max_m": None,
+            "thickness_mean_m": None,
+        }
+    return {
+        "thickness_min_m": float(thickness_layer.min()),
+        "thickness_max_m": float(thickness_layer.max()),
+        "thickness_mean_m": float(thickness_layer.mean()),
+    }
+
+
+def _layer_stats_entry(
+    layer_index: int,
+    phase_layer: np.ndarray,
+    relief_layer: np.ndarray,
+    thickness_layer: np.ndarray | None,
+) -> dict:
+    return {
+        "layer": layer_index + 1,
+        "phase_min_rad": float(phase_layer.min()),
+        "phase_max_rad": float(phase_layer.max()),
+        "height_min_m": float(relief_layer.min()),
+        "height_max_m": float(relief_layer.max()),
+        "height_mean_m": float(relief_layer.mean()),
+        **_thickness_layer_stats(thickness_layer),
+    }
+
+
 def build_layer_stats(
     phase_masks: np.ndarray,
     relief_map: np.ndarray,
@@ -669,22 +720,8 @@ def build_layer_stats(
 ) -> list[dict]:
     stats = []
     for idx in range(phase_masks.shape[0]):
-        phase_layer = phase_masks[idx]
-        relief_layer = relief_map[idx]
-        thickness_layer = thickness_map[idx] if thickness_map is not None else None
-        stats.append(
-            {
-                "layer": idx + 1,
-                "phase_min_rad": float(phase_layer.min()),
-                "phase_max_rad": float(phase_layer.max()),
-                "height_min_m": float(relief_layer.min()),
-                "height_max_m": float(relief_layer.max()),
-                "height_mean_m": float(relief_layer.mean()),
-                "thickness_min_m": float(thickness_layer.min()) if thickness_layer is not None else None,
-                "thickness_max_m": float(thickness_layer.max()) if thickness_layer is not None else None,
-                "thickness_mean_m": float(thickness_layer.mean()) if thickness_layer is not None else None,
-            }
-        )
+        thickness_layer = None if thickness_map is None else thickness_map[idx]
+        stats.append(_layer_stats_entry(idx, phase_masks[idx], relief_map[idx], thickness_layer))
     return stats
 
 
